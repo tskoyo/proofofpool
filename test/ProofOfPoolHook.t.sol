@@ -31,10 +31,7 @@ contract ProofPoolHookTest is Test, Deployers {
         // Mine a hook address whose low bits match our required permission flags.
         uint160 flags = uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG);
         (address hookAddress, bytes32 salt) = HookMiner.find(
-            address(this),
-            flags,
-            type(ProofPoolHook).creationCode,
-            abi.encode(address(manager), address(registry))
+            address(this), flags, type(ProofPoolHook).creationCode, abi.encode(address(manager), address(registry))
         );
 
         hook = new ProofPoolHook{salt: salt}(manager, registry);
@@ -42,23 +39,12 @@ contract ProofPoolHookTest is Test, Deployers {
 
         // Verify our test "human" address via the mock World ID (always accepts).
         uint256[8] memory emptyProof;
-        registry.verifyAndRegister(
-            verifiedUser,
-            0,
-            uint256(keccak256("nullifier-1")),
-            emptyProof
-        );
+        registry.verifyAndRegister(verifiedUser, 0, uint256(keccak256("nullifier-1")), emptyProof);
 
         // Initialize the pool with the DYNAMIC_FEE_FLAG — required for fee
         // overrides to take effect, per Uniswap's docs. Skipping this is the
         // most common way to get this wrong.
-        (key, ) = initPool(
-            currency0,
-            currency1,
-            hook,
-            LPFeeLibrary.DYNAMIC_FEE_FLAG,
-            SQRT_PRICE_1_1
-        );
+        (key,) = initPool(currency0, currency1, hook, LPFeeLibrary.DYNAMIC_FEE_FLAG, SQRT_PRICE_1_1);
     }
 
     /// @notice Verified swapper gets VERIFIED_FEE, unverified gets UNVERIFIED_FEE.
@@ -79,12 +65,7 @@ contract ProofPoolHookTest is Test, Deployers {
         uint256[8] memory emptyProof;
         uint256 nullifier = uint256(keccak256("nullifier-1"));
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Registry.DuplicateNullifier.selector,
-                nullifier
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(Registry.DuplicateNullifier.selector, nullifier));
         registry.verifyAndRegister(address(0xCAFE), 0, nullifier, emptyProof);
     }
 

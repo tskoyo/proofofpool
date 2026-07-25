@@ -39,15 +39,9 @@ contract Registry {
     /// @param _worldId The address of the WorldIDRouter contract on this chain.
     /// @param _appId Your World ID app ID from the Developer Portal.
     /// @param _actionId The action ID configured for this app (e.g. "verify-human").
-    constructor(
-        IWorldID _worldId,
-        string memory _appId,
-        string memory _actionId
-    ) {
+    constructor(IWorldID _worldId, string memory _appId, string memory _actionId) {
         WORLD_ID = _worldId;
-        EXTERNAL_NULLIFIER_HASH = abi
-            .encodePacked(abi.encodePacked(_appId).hashToField(), _actionId)
-            .hashToField();
+        EXTERNAL_NULLIFIER_HASH = abi.encodePacked(abi.encodePacked(_appId).hashToField(), _actionId).hashToField();
     }
 
     /// @notice Verify a World ID proof and register `signal` as a verified human.
@@ -57,22 +51,15 @@ contract Registry {
     /// @param root The root of the Merkle tree, from the ZK proof.
     /// @param nullifierHash The nullifier hash for this proof, preventing double-registration.
     /// @param proof The zero-knowledge proof from IDKit.
-    function verifyAndRegister(
-        address signal,
-        uint256 root,
-        uint256 nullifierHash,
-        uint256[8] calldata proof
-    ) external {
-        if (nullifierHashes[nullifierHash])
+    function verifyAndRegister(address signal, uint256 root, uint256 nullifierHash, uint256[8] calldata proof)
+        external
+    {
+        if (nullifierHashes[nullifierHash]) {
             revert DuplicateNullifier(nullifierHash);
+        }
 
         WORLD_ID.verifyProof(
-            root,
-            GROUP_ID,
-            abi.encodePacked(signal).hashToField(),
-            nullifierHash,
-            EXTERNAL_NULLIFIER_HASH,
-            proof
+            root, GROUP_ID, abi.encodePacked(signal).hashToField(), nullifierHash, EXTERNAL_NULLIFIER_HASH, proof
         );
 
         nullifierHashes[nullifierHash] = true;
