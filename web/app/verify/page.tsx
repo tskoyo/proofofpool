@@ -19,6 +19,13 @@ export default function VerifyPage() {
   const [error, setError] = useState<string | null>(null);
   const [rpContext, setRpContext] = useState<RpContext | null>(null);
 
+  const trimmedAddress = address.trim();
+  const isValidAddress = /^0x[a-fA-F0-9]{40}$/.test(trimmedAddress);
+  const addressError =
+    trimmedAddress.length > 0 && !isValidAddress
+      ? "That isn't a valid address — it needs 0x plus 40 hex characters."
+      : undefined;
+
   async function fetchRpContext(): Promise<RpContext> {
     const res = await fetch("/api/rp-signature", {
       method: "POST",
@@ -57,10 +64,28 @@ export default function VerifyPage() {
         alignItems: "center",
       }}
     >
-      <Link href="/">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/logo-lockup.svg" alt="ProofPool" style={{ height: 26 }} />
-      </Link>
+      <div style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <Link
+          href="/"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            color: "var(--text-tertiary)",
+            textDecoration: "none",
+            fontSize: "var(--text-body-s)",
+            fontWeight: 500,
+          }}
+        >
+          <Icon name="arrow-left" size={15} />
+          Back
+        </Link>
+        <Link href="/">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo-lockup.svg" alt="ProofPool" style={{ height: 26, display: "block" }} />
+        </Link>
+        <span style={{ width: 52 }} />
+      </div>
 
       <StepIndicator steps={STEPS} current={step} />
 
@@ -77,9 +102,25 @@ export default function VerifyPage() {
               placeholder="0x…"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              style={{ marginBottom: 20, textAlign: "left" }}
+              error={addressError}
+              style={{ marginBottom: 12, textAlign: "left" }}
             />
-            <Button variant="accent" style={{ width: "100%" }} disabled={!address} onClick={() => setStep(1)}>
+            <p
+              style={{
+                color: "var(--text-tertiary)",
+                fontSize: "var(--text-caption)",
+                textAlign: "left",
+                margin: "0 0 20px",
+              }}
+            >
+              Paste the wallet you want to swap from. Verification is bound to this address.
+            </p>
+            <Button
+              variant="accent"
+              style={{ width: "100%" }}
+              disabled={!isValidAddress}
+              onClick={() => setStep(1)}
+            >
               Connect wallet
             </Button>
           </>
@@ -93,13 +134,16 @@ export default function VerifyPage() {
               Complete a Selfie Check in the World App. This proves you&rsquo;re a unique human &mdash; it never
               links your identity to your wallet.
             </p>
-            <WalletChip address={address} style={{ margin: "0 auto 24px" }} />
+            <WalletChip address={trimmedAddress} style={{ margin: "0 auto 24px" }} />
             <Button variant="accent" style={{ width: "100%" }} onClick={openWorldApp}>
               Open World App
             </Button>
             {error && (
-              <p style={{ color: "var(--status-error)", fontSize: 13, marginBottom: 0 }}>{error}</p>
+              <p style={{ color: "var(--status-error)", fontSize: 13, margin: "16px 0 0" }}>{error}</p>
             )}
+            <Button variant="ghost" size="s" style={{ marginTop: 12 }} onClick={() => setStep(0)}>
+              Use a different address
+            </Button>
           </>
         )}
 
@@ -132,7 +176,7 @@ export default function VerifyPage() {
           action={ACTION}
           rp_context={rpContext}
           allow_legacy_proofs={true}
-          preset={selfieCheckLegacy({ signal: address })}
+          preset={selfieCheckLegacy({ signal: trimmedAddress })}
           handleVerify={async (result) => {
             if (result.protocol_version !== "3.0") {
               throw new Error(`unexpected protocol version: ${result.protocol_version}`);
@@ -144,7 +188,7 @@ export default function VerifyPage() {
               method: "POST",
               headers: { "content-type": "application/json" },
               body: JSON.stringify({
-                signal: address,
+                signal: trimmedAddress,
                 idkitResponse: {
                   proof: selfie.proof,
                   merkle_root: selfie.merkle_root,

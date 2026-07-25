@@ -3,6 +3,7 @@
 import type { CSSProperties } from "react";
 import {
   ArrowDown,
+  ArrowLeft,
   CircleCheckBig,
   Info,
   ScanFace,
@@ -18,6 +19,7 @@ import {
 // lucide-react instead: identical glyphs, no DOM surgery, and it tree-shakes.
 const registry = {
   "arrow-down": ArrowDown,
+  "arrow-left": ArrowLeft,
   "check-circle-2": CircleCheckBig,
   info: Info,
   "scan-face": ScanFace,

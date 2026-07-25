@@ -175,7 +175,7 @@ function FooterSection() {
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src="/logo-lockup-dark.svg" alt="ProofPool" style={{ height: 26 }} />
       <div style={{ color: "var(--ink-300)", fontSize: 13 }}>
-        ProofPool — proof-of-human swap fees, built on Uniswap v4.
+        Proof-of-human swap fees, built on Uniswap v4.
       </div>
     </footer>
   );
