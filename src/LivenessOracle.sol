@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @notice A backend-signed statement that `subject` passed a World Selfie Check.
 /// @dev Deliberately does not carry the World nullifier. It would be public in
@@ -26,7 +27,7 @@ struct LivenessAttestation {
 ///      World proof is checked off-chain and this contract attests to that result.
 ///      The security of every discount reduces to `trustedSigner` not being
 ///      compromised — this is federated trust, not a zero-knowledge proof.
-contract LivenessOracle is EIP712 {
+contract LivenessOracle is EIP712, Ownable {
     error NotOwner();
     error ZeroAddress();
 
@@ -41,18 +42,9 @@ contract LivenessOracle is EIP712 {
     ///      is the only bulk revocation available.
     address public trustedSigner;
 
-    /// @notice May rotate the signer.
-    address public owner;
-
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
-        _;
-    }
-
-    constructor(address _trustedSigner, address _owner) EIP712("ProofPool", "1") {
-        if (_trustedSigner == address(0) || _owner == address(0)) revert ZeroAddress();
+    constructor(address _trustedSigner, address _owner) EIP712("ProofPool", "1") Ownable(_owner) {
+        require(_trustedSigner != address(0) && _owner != address(0), ZeroAddress());
         trustedSigner = _trustedSigner;
-        owner = _owner;
     }
 
     /// @notice Check an attestation's signature and expiry.
@@ -82,9 +74,7 @@ contract LivenessOracle is EIP712 {
     ///      against, without reimplementing the domain separator.
     function hashAttestation(LivenessAttestation calldata attestation) public view returns (bytes32) {
         return _hashTypedDataV4(
-            keccak256(
-                abi.encode(ATTESTATION_TYPEHASH, attestation.subject, attestation.validUntil, attestation.nonce)
-            )
+            keccak256(abi.encode(ATTESTATION_TYPEHASH, attestation.subject, attestation.validUntil, attestation.nonce))
         );
     }
 
@@ -94,14 +84,8 @@ contract LivenessOracle is EIP712 {
     }
 
     function setTrustedSigner(address newSigner) external onlyOwner {
-        if (newSigner == address(0)) revert ZeroAddress();
+        require(newSigner != address(0), ZeroAddress());
         emit TrustedSignerUpdated(trustedSigner, newSigner);
         trustedSigner = newSigner;
-    }
-
-    function setOwner(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) revert ZeroAddress();
-        emit OwnerUpdated(owner, newOwner);
-        owner = newOwner;
     }
 }
