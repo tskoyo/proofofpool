@@ -1,0 +1,34 @@
+type Swap @entity(immutable: false) {
+  id: Bytes! # transaction hash + log index
+  swapper: Swapper!
+  verified: Boolean!
+  feeApplied: Int!
+  amountSpecified: BigInt!
+  tokenIn: Bytes
+  tokenOut: Bytes
+  amountIn: BigInt
+  amountOut: BigInt
+  blockNumber: BigInt!
+  timestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type Swapper @entity(immutable: false) {
+  id: Bytes! # address
+  totalSwaps: BigInt!
+  verifiedSwaps: BigInt!
+  swaps: [Swap!]! @derivedFrom(field: "swapper")
+}
+
+type SwapRecord @entity(immutable: false) {
+  id: Bytes! # EIP-712 attestation digest
+  usageCount: BigInt!
+}
+
+type RegistryConfig @entity(immutable: false) {
+  id: Bytes! # registry contract address
+  hook: Bytes
+  # Null until a MaxSwapsUpdated event fires — the constructor sets the
+  # initial value directly without emitting one.
+  maxSwaps: BigInt
+}
