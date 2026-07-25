@@ -409,7 +409,8 @@ export default function SwapPage() {
           {isConnected && verificationState === "exhausted" && (
             <Banner tone="warning" title="Discount used up" style={{ marginTop: 16 }}>
               Your attestation is still in date but its swap allowance is spent, so this swap pays the{" "}
-              {unverifiedLabel} tier. Verify again for a fresh allowance.
+              {unverifiedLabel} tier. Allowances are granted per verification window &mdash; completing a fresh
+              Selfie Check in the next window issues a new one.
             </Banner>
           )}
 

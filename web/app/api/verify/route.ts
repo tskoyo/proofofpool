@@ -9,7 +9,12 @@ import {
   serializeAttestation,
   type LivenessAttestation,
 } from "@/lib/attestation-types";
-import { reserveAttestation } from "@/lib/nullifier-store";
+import {
+  attestationNonce,
+  attestationValidUntil,
+  candidateEpochs,
+  challengeForEpoch,
+} from "@/lib/challenge";
 
 // Selfie Check has no on-chain verifier (only Orb does, groupId = 1), so the
 // proof is verified here against World's cloud endpoint and the result attested
@@ -119,10 +124,26 @@ export async function POST(req: Request) {
   if (!selfie.signal_hash) {
     return badRequest("proof is not bound to a signal");
   }
-  if (selfie.signal_hash.toLowerCase() !== hashSignal(signal).toLowerCase()) {
-    return badRequest("proof was issued for a different address", {
+
+  // The signal is `${address}:${challenge}`, so this single comparison enforces
+  // two things at once: the proof belongs to this address, and it was produced
+  // in a still-acceptable epoch.
+  //
+  // Which epoch matched is then carried forward — the attestation is derived
+  // from THAT epoch, not the current one. Otherwise replaying an epoch-E proof
+  // during E+1 would mint a fresh nonce and a fresh allowance, which is the
+  // whole thing this is meant to stop.
+  const proofSignalHash = selfie.signal_hash.toLowerCase();
+  const matchedEpoch = candidateEpochs().find(
+    (epoch) => hashSignal(`${signal}:${challengeForEpoch(epoch)}`).toLowerCase() === proofSignalHash,
+  );
+
+  if (matchedEpoch === undefined) {
+    return badRequest("proof was issued for a different address or an expired challenge", {
       proof_signal_hash: selfie.signal_hash,
-      expected_signal_hash: hashSignal(signal),
+      expected_signal_hashes: candidateEpochs().map((epoch) =>
+        hashSignal(`${signal}:${challengeForEpoch(epoch)}`),
+      ),
       signal,
     });
   }
@@ -158,7 +179,6 @@ export async function POST(req: Request) {
   const attesterKey = process.env.ATTESTER_PRIVATE_KEY as Hex | undefined;
   const oracleAddress = process.env.NEXT_PUBLIC_ORACLE_ADDRESS as Address | undefined;
   const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? "11155111");
-  const ttlSeconds = Number(process.env.ATTESTATION_TTL_SECONDS ?? "3600");
 
   // The proof is valid; signing is a separate concern. Report success rather
   // than failing when the signing side isn't configured yet.
@@ -171,24 +191,16 @@ export async function POST(req: Request) {
   }
 
   const account = privateKeyToAccount(attesterKey);
-  const validUntil = Math.floor(Date.now() / 1000) + ttlSeconds;
 
-  // A verified proof is not single-use: replaying a captured one would mint a
-  // fresh nonce, hence a fresh digest, hence a reset swap allowance. Allow at
-  // most one live attestation per human so the cap can't be farmed.
-  const reservation = reserveAttestation(selfie.nullifier, validUntil);
-  if (!reservation.ok) {
-    return badRequest("an attestation for this person is still active", {
-      retryAfter: reservation.retryAfter,
-    });
-  }
-
+  // Every field is derived from the proof's own epoch, never random and never
+  // from the clock. Replaying a proof therefore rebuilds a byte-identical
+  // attestation — same digest, same already-spent allowance — whether it is
+  // replayed a second later or a full epoch later. A new allowance needs a new
+  // challenge, which needs a new Selfie Check.
   const attestation: LivenessAttestation = {
     subject: signal,
-    validUntil: BigInt(validUntil),
-    // Random, so re-verifying after expiry produces a different digest and
-    // therefore a fresh swap allowance instead of resuming an exhausted one.
-    nonce: BigInt(`0x${crypto.randomUUID().replace(/-/g, "")}`),
+    validUntil: attestationValidUntil(matchedEpoch),
+    nonce: attestationNonce(selfie.nullifier, matchedEpoch),
   };
 
   // The signature is bound to this specific oracle deployment through the

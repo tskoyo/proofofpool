@@ -134,9 +134,13 @@ export function useAttestation() {
 export function useAttestationFor(address: Address | null) {
   const { attestation, clear } = useAttestation();
 
-  if (!attestation || !address) return null;
-  if (attestation.attestation.subject.toLowerCase() !== address.toLowerCase()) return null;
-  if (isExpired(attestation.attestation)) return null;
-
-  return { ...attestation, clear };
+  // Memoised because callers put this in dependency arrays. Returning a fresh
+  // object each render would recreate their callbacks, refire their effects,
+  // and loop contract reads forever.
+  return useMemo(() => {
+    if (!attestation || !address) return null;
+    if (attestation.attestation.subject.toLowerCase() !== address.toLowerCase()) return null;
+    if (isExpired(attestation.attestation)) return null;
+    return { ...attestation, clear };
+  }, [attestation, address, clear]);
 }

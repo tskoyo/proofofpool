@@ -48,6 +48,13 @@ bulk lever.
 `ProofPoolRouter`. Swaps routed via Universal Router or any aggregator pay the
 full tier regardless of verification.
 
+**The cap bursts to 2x.** Attestations are issued per verification window and
+expire two windows out, so a user who verifies in consecutive windows briefly
+holds two live attestations and can take up to `2 * maxSwaps` in that overlap.
+The sustained rate is still `maxSwaps` per window. The alternative — expiring
+after one window — would hand somebody who verifies near a boundary an
+attestation lasting seconds, so the overlap is the deliberate trade.
+
 <!-- **3. The Graph + Pool Guardian agent** — not just a dashboard.
 Classic subgraph indexes swaps + fee tier + verified/unverified split. An AI agent queries that data and reasons over it — flags suspicious cadence, summarizes fee flow, answers questions — instead of just printing raw numbers. The agent is what makes this count for the Graph prize; a plain subgraph doesn't qualify on its own. -->
 

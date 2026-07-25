@@ -22,11 +22,23 @@ export default function VerifyPage() {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rpContext, setRpContext] = useState<RpContext | null>(null);
+  const [challenge, setChallenge] = useState<string | null>(null);
 
   const { address, status, error: walletError, connect, disconnect, switchToTargetChain, isConnected, isWrongChain } =
     useWallet();
   const { state: verificationState, isVerified, refresh } = useVerificationStatus(address);
   const { setAttestation } = useAttestation();
+
+  // The proof must commit to the current epoch's challenge, or the server will
+  // reject it. Fetched fresh each time the widget opens rather than cached, so a
+  // user who leaves the page open across an epoch boundary still gets a usable
+  // challenge instead of a confusing rejection.
+  async function fetchChallenge(): Promise<string> {
+    const res = await fetch("/api/challenge");
+    if (!res.ok) throw new Error("could not fetch a verification challenge");
+    const body = await res.json();
+    return body.challenge as string;
+  }
 
   async function fetchRpContext(): Promise<RpContext> {
     const res = await fetch("/api/rp-signature", {
@@ -47,7 +59,9 @@ export default function VerifyPage() {
   async function openWorldApp() {
     setError(null);
     try {
-      setRpContext(await fetchRpContext());
+      const [context, challenge] = await Promise.all([fetchRpContext(), fetchChallenge()]);
+      setRpContext(context);
+      setChallenge(challenge);
       setOpen(true);
     } catch {
       setError("Could not reach the signing endpoint. Check the server configuration.");
@@ -251,7 +265,7 @@ export default function VerifyPage() {
         )}
       </Card>
 
-      {rpContext && address && (
+      {rpContext && address && challenge && (
         <IDKitRequestWidget
           open={open}
           onOpenChange={setOpen}
@@ -259,7 +273,10 @@ export default function VerifyPage() {
           action={ACTION}
           rp_context={rpContext}
           allow_legacy_proofs={true}
-          preset={selfieCheckLegacy({ signal: address })}
+          // Binds the proof to both the wallet and the epoch. The server
+          // rebuilds this exact string to check signal_hash, so the address must
+          // be interpolated byte-for-byte as it is sent in the request body.
+          preset={selfieCheckLegacy({ signal: `${address}:${challenge}` })}
           handleVerify={async (result) => {
             // Forward the IDKit result untouched — it is already the exact body
             // /api/v4/verify expects, and its fields are public inputs of the
