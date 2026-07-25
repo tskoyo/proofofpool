@@ -37,6 +37,9 @@ function Nav() {
                 <a href="#fees" style={navLinkStyle}>
                     Fees
                 </a>
+                <Link href="/dashboard" style={navLinkStyle}>
+                    Live stats
+                </Link>
                 <Link href="/swap" style={navLinkStyle}>
                     Launch app
                 </Link>

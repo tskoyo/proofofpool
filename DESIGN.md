@@ -37,12 +37,15 @@ because the trusted-router address is immutable.
 
 ## Event surface for indexers
 
-`ProofPoolHook.SwapPriced` is the protocol's data contract, not incidental
-logging. The hook keeps no aggregates and `Registry` stores only a per-digest
-count, so the verified/unverified split and the fee premium anonymous flow pays
-LPs exist *only* in these logs. Its fields are asserted in
-`ProofOfPoolHook.t.sol` for that reason — a silent field change would surface as
-wrong analytics rather than a failing build.
+`ProofPoolHook.SwapPriced` is the protocol's durable data contract, not
+incidental logging. `Registry` stores only a per-digest count. The hook also
+contains an explicitly `Demo only` per-pool aggregate with swap counts and
+requested exact-input volume split by fee tier and input token. It exists for
+simple RPC reads during the demo, is not settled-volume accounting, and should
+be removed afterward. Transaction-level analytics and the actual fee premium
+anonymous flow pays LPs still come from logs. `SwapPriced` fields are asserted
+in `ProofOfPoolHook.t.sol` for that reason — a silent field change would surface
+as wrong analytics rather than a failing build.
 
 ```solidity
 event SwapPriced(

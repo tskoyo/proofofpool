@@ -13,8 +13,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Must match the *_LIQUIDITY_AMOUNT constants in DeployPool.s.sol.
-USDC_NEEDED=10000000000 # 10,000 MyUSDC (6dp)
-WBTC_NEEDED=10000000    # 0.1 MyWBTC   (8dp)
+USDC_NEEDED=500000000000 # 500,000 MyUSDC (6dp)
+WBTC_NEEDED=500000000    # 5 MyWBTC       (8dp)
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -87,16 +87,42 @@ check_token "$TOKEN_WBTC" "$WBTC_NEEDED" MyWBTC 8
 echo
 echo "Deploying to Sepolia..."
 
-forge script script/DeployPool.s.sol:DeployPool \
-  --rpc-url "$SEPOLIA_RPC_URL" \
-  --private-key "$PRIVATE_KEY" \
-  --broadcast \
-  ${ETHERSCAN_API_KEY:+--verify} \
-  -vvvv
+# A slow or flaky RPC times out waiting for receipts even though the
+# transactions landed. Re-running from scratch would deploy a second set of
+# contracts and leave the first orphaned; `forge script --resume` reads the
+# broadcast file, finds what already confirmed, and continues from there. That
+# is the correct recovery, so try it automatically before giving up.
+#
+# ETH_RPC_TIMEOUT gives a slow free-tier endpoint room before the first attempt
+# gives up at all.
+export ETH_RPC_TIMEOUT="${ETH_RPC_TIMEOUT:-120}"
+
+deploy() {
+  forge script script/DeployPool.s.sol:DeployPool \
+    --rpc-url "$SEPOLIA_RPC_URL" \
+    --private-key "$PRIVATE_KEY" \
+    --broadcast \
+    ${ETHERSCAN_API_KEY:+--verify} \
+    "$@" \
+    -vvvv
+}
+
+if ! deploy; then
+  echo
+  echo "Deploy did not complete. Retrying with --resume, which picks up the"
+  echo "transactions that already confirmed rather than deploying a second set."
+  echo
+  sleep 10
+  deploy --resume || fail "resume failed too. Inspect broadcast/DeployPool.s.sol/11155111/
+       to see what confirmed before re-running anything — a fresh run deploys a
+       whole new set of contracts and orphans the first."
+fi
 
 cat <<'NEXT'
 
-Deployed. Copy the addresses logged above into web/.env:
+Deployed. The four addresses logged above go in TWO places.
+
+1. web/.env — for the app:
 
   NEXT_PUBLIC_ORACLE_ADDRESS=<LivenessOracle>
   NEXT_PUBLIC_REGISTRY_ADDRESS=<Registry>
@@ -104,10 +130,23 @@ Deployed. Copy the addresses logged above into web/.env:
   NEXT_PUBLIC_ROUTER_ADDRESS=<ProofPoolRouter>
   NEXT_PUBLIC_RPC_URL=<your Sepolia RPC>
 
+2. The root .env — for script/seed-traffic.sh, which cannot read web/.env:
+
+  PROOFPOOL_ORACLE=<LivenessOracle>
+  PROOFPOOL_REGISTRY=<Registry>
+  PROOFPOOL_HOOK=<ProofPoolHook>
+  PROOFPOOL_ROUTER=<ProofPoolRouter>
+
 The oracle address is part of the EIP-712 domain, so getting it wrong produces
 signatures the contract rejects. The attester key only signs and never sends a
 transaction, so it does NOT need to be funded.
 
-The pool is new: update the PoolKey hook address in web/lib/swap.ts to match
-NEXT_PUBLIC_HOOK_ADDRESS, or swaps will address a pool that was never created.
+The hook address is part of the PoolKey, so this is a brand new pool: any older
+attestation is dead, and any traffic seeded against the previous deployment sits
+in a pool nothing will query. The web app reads the hook from
+NEXT_PUBLIC_HOOK_ADDRESS, so there is no source file to edit.
+
+Then seed the demo history:
+
+  ./script/seed-traffic.sh --dry-run     # price it first
 NEXT

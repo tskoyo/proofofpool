@@ -1,13 +1,53 @@
+type Pool @entity(immutable: false) {
+  id: Bytes! # Uniswap v4 pool ID
+  # Known for the deployed demo pool. Other pools served by this hook remain
+  # nullable until PoolManager indexing is added.
+  currency0: Bytes
+  currency1: Bytes
+  hook: Bytes!
+  fee: Int
+  tickSpacing: Int
+  swaps: [Swap!]! @derivedFrom(field: "pool")
+
+  # Running totals, accumulated in handleSwapPriced. They exist so a dashboard
+  # can read the headline split in one query instead of paging every Swap.
+  #
+  # Deliberately field-for-field with ProofPoolHook.demoPoolStats, so the two can
+  # be compared: the contract counts the same things from the same events, and a
+  # divergence means this mapping has drifted from the chain.
+  totalSwaps: BigInt!
+  verifiedSwaps: BigInt!
+  unverifiedSwaps: BigInt!
+
+  # REQUESTED exact-input volume in raw token units, split by fee tier and by
+  # input currency. Exact-output swaps are counted above but contribute nothing
+  # here — their specified amount is an output, so adding it to an input total
+  # would be meaningless.
+  #
+  # Not settled volume. Settled amounts live on Swap.amountIn/amountOut and
+  # exist only for swaps routed through ProofPoolRouter; these totals cover
+  # every swap the hook priced, including ones that bypassed it.
+  verifiedVolume0: BigInt!
+  verifiedVolume1: BigInt!
+  unverifiedVolume0: BigInt!
+  unverifiedVolume1: BigInt!
+}
+
 type Swap @entity(immutable: false) {
   id: Bytes! # transaction hash + log index
+  pool: Pool!
   swapper: Swapper!
   verified: Boolean!
   feeApplied: Int!
+  zeroForOne: Boolean!
   amountSpecified: BigInt!
+  digest: Bytes!
+  usageRecord: SwapRecord
   tokenIn: Bytes
   tokenOut: Bytes
   amountIn: BigInt
   amountOut: BigInt
+  routerExecuted: Boolean!
   blockNumber: BigInt!
   timestamp: BigInt!
   transactionHash: Bytes!
@@ -23,6 +63,26 @@ type Swapper @entity(immutable: false) {
 type SwapRecord @entity(immutable: false) {
   id: Bytes! # EIP-712 attestation digest
   usageCount: BigInt!
+  swaps: [Swap!]! @derivedFrom(field: "usageRecord")
+  uses: [DiscountedSwapUse!]! @derivedFrom(field: "record")
+}
+
+type DiscountedSwapUse @entity(immutable: true) {
+  id: Bytes! # transaction hash + Registry log index
+  record: SwapRecord!
+  digest: Bytes!
+  newCount: BigInt!
+  transactionHash: Bytes!
+  blockNumber: BigInt!
+  timestamp: BigInt!
+}
+
+# Internal transaction-scoped queue used to join Hook and Router events without
+# assuming that their log indexes are adjacent. The pool ID is part of the ID.
+type TransactionPoolCursor @entity(immutable: false) {
+  id: Bytes! # transaction hash + pool ID
+  swapIds: [Bytes!]!
+  nextRouterOrdinal: Int!
 }
 
 type RegistryConfig @entity(immutable: false) {

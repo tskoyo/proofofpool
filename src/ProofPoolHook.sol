@@ -42,6 +42,24 @@ contract ProofPoolHook is BaseHook {
     /// @notice The only router allowed to identify the wallet behind a swap.
     address public immutable TRUSTED_ROUTER;
 
+    // Demo only
+    // These aggregates make the headline fee split available through a few RPC
+    // reads while the subgraph/dashboard are being built. Volumes are requested
+    // exact-input amounts, denominated in raw token units; exact-output swaps are
+    // counted but deliberately excluded from the volume fields.
+    struct DemoPoolStats {
+        uint256 totalSwaps;
+        uint256 verifiedSwaps;
+        uint256 unverifiedSwaps;
+        uint256 verifiedInputVolume0;
+        uint256 verifiedInputVolume1;
+        uint256 unverifiedInputVolume0;
+        uint256 unverifiedInputVolume1;
+    }
+
+    mapping(PoolId poolId => DemoPoolStats stats) public demoPoolStats;
+    // End Demo only
+
     /// @notice Emitted for every swap this hook prices, discounted or not.
     /// @param poolId Pool the swap ran against. One hook deployment can serve
     ///        several pools, so consumers must filter on this rather than assume.
@@ -116,10 +134,47 @@ contract ProofPoolHook is BaseHook {
         if (verified) {
             fee = VERIFIED_FEE;
         }
-        emit SwapPriced(key.toId(), swapper, verified, fee, params.zeroForOne, params.amountSpecified, digest);
+        PoolId poolId = key.toId();
+
+        // Demo only
+        _recordDemoStats(poolId, verified, params.zeroForOne, params.amountSpecified);
+        // End Demo only
+
+        emit SwapPriced(poolId, swapper, verified, fee, params.zeroForOne, params.amountSpecified, digest);
 
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, fee | LPFeeLibrary.OVERRIDE_FEE_FLAG);
     }
+
+    // Demo only
+    function _recordDemoStats(PoolId poolId, bool verified, bool zeroForOne, int256 amountSpecified) private {
+        DemoPoolStats storage stats = demoPoolStats[poolId];
+        stats.totalSwaps++;
+
+        if (verified) {
+            stats.verifiedSwaps++;
+        } else {
+            stats.unverifiedSwaps++;
+        }
+
+        if (amountSpecified >= 0) return;
+
+        // Written this way so even type(int256).min cannot overflow while the
+        // Hook is classifying arbitrary PoolManager input.
+        uint256 inputAmount = uint256(-(amountSpecified + 1)) + 1;
+        if (verified) {
+            if (zeroForOne) {
+                stats.verifiedInputVolume0 += inputAmount;
+            } else {
+                stats.verifiedInputVolume1 += inputAmount;
+            }
+        } else if (zeroForOne) {
+            stats.unverifiedInputVolume0 += inputAmount;
+        } else {
+            stats.unverifiedInputVolume1 += inputAmount;
+        }
+    }
+
+    // End Demo only
 
     /// @dev Hook data is an identity claim, so it is ignored unless it arrived
     ///      through the router that binds the claim to its caller and payer.

@@ -14,5 +14,13 @@ docs/
 # Dotenv file
 .env
 
+# Browser-tool console logs, written wherever the CLI happens to run.
+.playwright-cli/
+
+# Checkpoint for script/seed-traffic.sh — which tick a seeding run reached.
+# Local to whoever ran it; committing it would make someone else's run refuse
+# to start or skip ticks they never seeded.
+.seed-progress
+
 # Editor
 .vscode/

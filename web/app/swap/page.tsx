@@ -205,6 +205,18 @@ export default function SwapPage() {
           <img src="/logo-lockup.svg" alt="ProofPool" style={{ height: 24, display: "block" }} />
         </Link>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <Link
+            href="/dashboard"
+            style={{
+              color: "var(--text-secondary)",
+              textDecoration: "none",
+              fontSize: "var(--text-body-s)",
+              fontWeight: 500,
+              marginRight: 4,
+            }}
+          >
+            Live stats
+          </Link>
           <WalletButton
             status={status}
             address={address}

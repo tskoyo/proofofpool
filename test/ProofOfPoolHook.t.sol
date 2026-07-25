@@ -362,6 +362,39 @@ contract ProofPoolHookTest is Test, Deployers {
         proofPoolRouter.exactInputSingle(params, _emptyAttestation(), "");
     }
 
+    // --- Demo-only RPC aggregates -----------------------------------------
+
+    function test_demoStatsTrackFeeTierAndInputCurrency() public {
+        (LivenessAttestation memory attestation, bytes memory signature) =
+            _attest(verifiedUser, block.timestamp + 1 hours);
+
+        _swap(verifiedUser, attestation, signature);
+
+        ProofPoolRouter.ExactInputSingleParams memory params = _exactInputParams();
+        params.zeroForOne = false;
+        params.sqrtPriceLimitX96 = MAX_PRICE_LIMIT;
+        vm.prank(unverifiedUser);
+        proofPoolRouter.exactInputSingle(params, _emptyAttestation(), "");
+
+        (
+            uint256 totalSwaps,
+            uint256 verifiedSwaps,
+            uint256 unverifiedSwaps,
+            uint256 verifiedInputVolume0,
+            uint256 verifiedInputVolume1,
+            uint256 unverifiedInputVolume0,
+            uint256 unverifiedInputVolume1
+        ) = hook.demoPoolStats(key.toId());
+
+        assertEq(totalSwaps, 2);
+        assertEq(verifiedSwaps, 1);
+        assertEq(unverifiedSwaps, 1);
+        assertEq(verifiedInputVolume0, SWAP_AMOUNT);
+        assertEq(verifiedInputVolume1, 0);
+        assertEq(unverifiedInputVolume0, 0);
+        assertEq(unverifiedInputVolume1, SWAP_AMOUNT);
+    }
+
     // --- Helpers -----------------------------------------------------------
 
     function _attest(address subject, uint256 validUntil)

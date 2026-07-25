@@ -861,6 +861,55 @@
   },
   {
     "type": "function",
+    "name": "demoPoolStats",
+    "inputs": [
+      {
+        "name": "poolId",
+        "type": "bytes32",
+        "internalType": "PoolId"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "totalSwaps",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "verifiedSwaps",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "unverifiedSwaps",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "verifiedInputVolume0",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "verifiedInputVolume1",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "unverifiedInputVolume0",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "unverifiedInputVolume1",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "getHookPermissions",
     "inputs": [],
     "outputs": [
@@ -962,6 +1011,12 @@
     "name": "SwapPriced",
     "inputs": [
       {
+        "name": "poolId",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "PoolId"
+      },
+      {
         "name": "swapper",
         "type": "address",
         "indexed": true,
@@ -980,10 +1035,22 @@
         "internalType": "uint24"
       },
       {
+        "name": "zeroForOne",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      },
+      {
         "name": "amountSpecified",
         "type": "int256",
         "indexed": false,
         "internalType": "int256"
+      },
+      {
+        "name": "digest",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
       }
     ],
     "anonymous": false

@@ -5,7 +5,7 @@
   "scripts": {
     "codegen": "graph codegen",
     "build": "graph build",
-    "deploy": "graph deploy --studio proofofpool"
+    "deploy": "graph deploy proof-pool-sepolia"
   },
   "dependencies": {
     "@graphprotocol/graph-cli": "^0.97.0",

@@ -1,4 +1,8 @@
-# Developer feedback — World ID Selfie Check integration
+# Testing report — World ID Selfie Check integration
+
+Developer feedback (SDK friction, documentation gaps) and
+[user feedback](#user-feedback--testing-the-selfie-check-flow) from running the
+flow on real devices.
 
 Written while integrating Selfie Check into ProofPool, a Uniswap v4 hook that
 prices verified humans differently from anonymous flow.
@@ -159,6 +163,57 @@ silent authorization bug rather than a visible failure.
   does not mean before writing any contract code.
 - The controlled `IDKitRequestWidget` (`open` / `onOpenChange`) is a better API
   than the v3 render-prop pattern.
+
+---
+
+## User feedback — testing the Selfie Check flow
+
+Everything above is developer-side. This section is what happened when people
+actually ran the flow on their phones.
+
+**Headline: there is no friction inside Selfie Check itself.** Once a World
+account exists, the credential flow is fast and straightforward — no delays, no
+service errors, no retries, nothing that needed explaining to the person doing
+it. For an integrator choosing between credential types, that matters: the
+step we expected to be the risky part of the funnel was the part nobody
+noticed.
+
+### The one friction point is upstream of you
+
+Users who do not already have World App installed have to install it and create
+an account before they can do anything. That is the only drop-off surface we
+found, and it is not in Selfie Check.
+
+It is also handled well. World's own onboarding is simple and well guided, and
+nobody needed help getting through it. But it is still the difference between a
+sub-minute flow and a multi-minute one, and for an app like ours — where
+verification buys a *fee discount*, not access to the product — that gap is
+where a real user decides the discount is not worth it.
+
+Worth knowing rather than acting on, because the fix is distribution, not UX.
+
+### What we observed
+
+Tested on both Android and iOS by project contributors, some of whom already had
+World App installed and some of whom did not. Both platforms completed the flow
+successfully; we saw no behavioural difference between them.
+
+- Selfie capture worked first time. No retries, no failed or timed-out
+  verifications, no waiting on World's service.
+- The app → World App → app handoff returned cleanly; nobody got stranded in
+  World App or had to navigate back manually.
+- Nobody misread what the selfie was for, but see the caveat: we already knew.
+
+### Caveat on who tested this
+
+Everyone who ran the flow had already built or seen the app, so this covers
+**usability, not comprehension**. Whether a first-time user understands why a
+liveness check earns a lower swap fee — or trusts it enough to try — is not
+something a team testing its own product can measure, and we are not claiming
+to have done so.
+
+Drop-off numbers in the usual sense do not exist here either. Testing was a
+handful of deliberate runs, not traffic.
 
 ---
 
