@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { Button, Card, Icon, QuoteCompare } from "@/components/ds";
+import { Button, Card, Icon } from "@/components/ds";
 import type { IconName } from "@/components/ds";
+import { FeeCompareSection } from "@/components/fee-compare-section";
 
 const navLinkStyle = {
   color: "var(--text-secondary)",
@@ -102,25 +103,6 @@ function Hero() {
   );
 }
 
-function FeeCompare() {
-  return (
-    <section id="fees" style={{ padding: "0 48px 100px", maxWidth: 640, margin: "0 auto" }}>
-      <h2 style={{ fontSize: 28, fontWeight: 600, textAlign: "center", marginBottom: 8 }}>
-        Two fee tiers. One verification.
-      </h2>
-      <p style={{ textAlign: "center", color: "var(--text-secondary)", marginBottom: 36 }}>
-        The same swap, priced differently by wallet trust.
-      </p>
-      <Card>
-        <QuoteCompare
-          standard={{ fee: "0.30%", amount: "0.0309 ETH" }}
-          verified={{ fee: "0.05%", amount: "0.0312 ETH" }}
-        />
-      </Card>
-    </section>
-  );
-}
-
 const steps: { icon: IconName; t: string; d: string }[] = [
   { icon: "wallet", t: "Connect your wallet", d: "Any standard EVM wallet works — no new account needed." },
   {
@@ -186,7 +168,7 @@ export default function Home() {
     <>
       <Nav />
       <Hero />
-      <FeeCompare />
+      <FeeCompareSection />
       <HowItWorks />
       <FooterSection />
     </>
