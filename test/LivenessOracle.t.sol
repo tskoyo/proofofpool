@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {LivenessAttestation, LivenessOracle} from "../src/LivenessOracle.sol";
 
 contract LivenessOracleTest is Test {
@@ -27,7 +28,7 @@ contract LivenessOracleTest is Test {
         vm.expectRevert(LivenessOracle.ZeroAddress.selector);
         new LivenessOracle(address(0), owner);
 
-        vm.expectRevert(LivenessOracle.ZeroAddress.selector);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableInvalidOwner.selector, address(0)));
         new LivenessOracle(signer, address(0));
     }
 
@@ -81,7 +82,7 @@ contract LivenessOracleTest is Test {
     }
 
     function test_setTrustedSignerRejectsUnauthorizedAndZeroAddress() public {
-        vm.expectRevert(LivenessOracle.NotOwner.selector);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
         oracle.setTrustedSigner(address(0x1234));
 
         vm.prank(owner);
@@ -93,14 +94,14 @@ contract LivenessOracleTest is Test {
         address newOwner = address(0xABCD);
 
         vm.expectEmit(true, true, false, false, address(oracle));
-        emit LivenessOracle.OwnerUpdated(owner, newOwner);
+        emit Ownable.OwnershipTransferred(owner, newOwner);
         vm.prank(owner);
-        oracle.setOwner(newOwner);
+        oracle.transferOwnership(newOwner);
 
         assertEq(oracle.owner(), newOwner);
 
         vm.prank(owner);
-        vm.expectRevert(LivenessOracle.NotOwner.selector);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, owner));
         oracle.setTrustedSigner(address(0x1234));
 
         vm.prank(newOwner);
@@ -108,10 +109,10 @@ contract LivenessOracleTest is Test {
         assertEq(oracle.trustedSigner(), address(0x1234));
     }
 
-    function test_setOwnerRejectsZeroAddress() public {
+    function test_transferOwnershipRejectsZeroAddress() public {
         vm.prank(owner);
-        vm.expectRevert(LivenessOracle.ZeroAddress.selector);
-        oracle.setOwner(address(0));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableInvalidOwner.selector, address(0)));
+        oracle.transferOwnership(address(0));
     }
 
     function _sign(LivenessAttestation memory attestation) internal view returns (bytes memory) {

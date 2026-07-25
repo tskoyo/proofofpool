@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 import {LivenessAttestation, LivenessOracle} from "./LivenessOracle.sol";
 
@@ -13,7 +14,7 @@ import {LivenessAttestation, LivenessOracle} from "./LivenessOracle.sol";
 ///
 ///      Nothing here records World nullifiers, so one human can hold attestations
 ///      for any number of addresses. That is a known, accepted gap; see README.md.
-contract Registry {
+contract Registry is Ownable {
     error NotOwner();
     error NotHook();
     error ZeroAddress();
@@ -39,24 +40,15 @@ contract Registry {
     ///      contract's address, so the Registry has to exist first.
     address public hook;
 
-    /// @notice May set the hook and change the swap cap.
-    address public owner;
-
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
-        _;
-    }
-
     modifier onlyHook() {
-        if (msg.sender != hook) revert NotHook();
+        require(msg.sender == hook, NotHook());
         _;
     }
 
-    constructor(LivenessOracle _oracle, uint256 _maxSwaps, address _owner) {
-        if (address(_oracle) == address(0) || _owner == address(0)) revert ZeroAddress();
+    constructor(LivenessOracle _oracle, uint256 _maxSwaps, address _owner) Ownable(_owner) {
+        require(address(_oracle) != address(0) && _owner != address(0), ZeroAddress());
         ORACLE = _oracle;
         maxSwaps = _maxSwaps;
-        owner = _owner;
     }
 
     /// @notice Whether `swapper` may take the discounted fee with this attestation.
@@ -99,7 +91,7 @@ contract Registry {
     }
 
     function setHook(address newHook) external onlyOwner {
-        if (newHook == address(0)) revert ZeroAddress();
+        require(newHook != address(0), ZeroAddress());
         emit HookUpdated(hook, newHook);
         hook = newHook;
     }
@@ -107,11 +99,5 @@ contract Registry {
     function setMaxSwaps(uint256 newMaxSwaps) external onlyOwner {
         emit MaxSwapsUpdated(maxSwaps, newMaxSwaps);
         maxSwaps = newMaxSwaps;
-    }
-
-    function setOwner(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) revert ZeroAddress();
-        emit OwnerUpdated(owner, newOwner);
-        owner = newOwner;
     }
 }

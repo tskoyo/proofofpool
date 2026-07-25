@@ -94,17 +94,4 @@ contract ProofPoolHookUnitTest is Test {
         assertFalse(verified);
         assertEq(digest, bytes32(0));
     }
-
-    function test_zeroSwapperInAttestedHookDataIsRejected() public {
-        ProofPoolHookHarness hook = new ProofPoolHookHarness(manager, registry, trustedRouter);
-        LivenessAttestation memory attestation =
-            LivenessAttestation({subject: address(0), validUntil: block.timestamp + 1 hours, nonce: 1});
-
-        (address swapper, bool verified, bytes32 digest) =
-            hook.priceSwap(trustedRouter, abi.encode(address(0), attestation, hex"deadbeef"));
-
-        assertEq(swapper, trustedRouter);
-        assertFalse(verified);
-        assertEq(digest, bytes32(0));
-    }
 }

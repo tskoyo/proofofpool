@@ -43,8 +43,8 @@ contract ProofPoolHook is BaseHook {
     event SwapPriced(address indexed swapper, bool verified, uint24 feeApplied, int256 amountSpecified);
 
     constructor(IPoolManager _poolManager, Registry _registry, address _trustedRouter) BaseHook(_poolManager) {
-        if (_trustedRouter == address(0)) revert InvalidTrustedRouter();
-        if (address(_registry) == address(0)) revert InvalidRegistry();
+        require(_trustedRouter != address(0), InvalidTrustedRouter());
+        require(address(_registry) != address(0), InvalidRegistry());
         REGISTRY = _registry;
         TRUSTED_ROUTER = _trustedRouter;
     }
@@ -89,7 +89,10 @@ contract ProofPoolHook is BaseHook {
             REGISTRY.recordSwap(digest);
         }
 
-        uint24 fee = verified ? VERIFIED_FEE : UNVERIFIED_FEE;
+        uint24 fee = UNVERIFIED_FEE;
+        if (verified) {
+            fee = VERIFIED_FEE;
+        }
         emit SwapPriced(swapper, verified, fee, params.amountSpecified);
 
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, fee | LPFeeLibrary.OVERRIDE_FEE_FLAG);
@@ -116,7 +119,8 @@ contract ProofPoolHook is BaseHook {
         bytes memory signature;
         (swapper, attestation, signature) = abi.decode(hookData, (address, LivenessAttestation, bytes));
 
-        if (swapper == address(0)) return (sender, false, bytes32(0));
+        // Unrequired due to existance of trusted Router
+        //if (swapper == address(0)) return (sender, false, bytes32(0));
 
         (verified, digest) = REGISTRY.discountFor(attestation, signature, swapper);
     }

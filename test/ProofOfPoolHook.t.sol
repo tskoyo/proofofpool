@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
@@ -17,6 +18,8 @@ import {LivenessAttestation, LivenessOracle} from "../src/LivenessOracle.sol";
 /// @notice Tests for the fee split, the trusted-router identity binding, and the
 ///         two limits on a liveness attestation (expiry AND swap cap).
 contract ProofPoolHookTest is Test, Deployers {
+    error HookAddressMismatch(address expected, address actual);
+
     bytes32 internal constant SWAP_EVENT_SIGNATURE =
         keccak256("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)");
     uint128 internal constant SWAP_AMOUNT = 1e12;
@@ -54,7 +57,7 @@ contract ProofPoolHookTest is Test, Deployers {
         );
 
         hook = new ProofPoolHook{salt: salt}(manager, registry, address(proofPoolRouter));
-        require(address(hook) == hookAddress, "hook address mismatch");
+        require(address(hook) == hookAddress, HookAddressMismatch(hookAddress, address(hook)));
 
         // The hook's address depends on the registry's, so this can only be wired
         // up after both exist.
@@ -70,7 +73,8 @@ contract ProofPoolHookTest is Test, Deployers {
     // --- Pricing -----------------------------------------------------------
 
     function test_validAttestationGetsLowFeeAndCountsOneSwap() public {
-        (LivenessAttestation memory attestation, bytes memory signature) = _attest(verifiedUser, block.timestamp + 1 hours);
+        (LivenessAttestation memory attestation, bytes memory signature) =
+            _attest(verifiedUser, block.timestamp + 1 hours);
         bytes32 digest = oracle.hashAttestation(attestation);
 
         vm.recordLogs();
@@ -91,7 +95,8 @@ contract ProofPoolHookTest is Test, Deployers {
     /// @notice An expired attestation must not revert the swap — it just loses the discount.
     function test_expiredAttestationFallsBackToHighFeeWithoutReverting() public {
         vm.warp(1_000_000);
-        (LivenessAttestation memory attestation, bytes memory signature) = _attest(verifiedUser, block.timestamp + 1 hours);
+        (LivenessAttestation memory attestation, bytes memory signature) =
+            _attest(verifiedUser, block.timestamp + 1 hours);
 
         vm.warp(block.timestamp + 2 hours);
 
@@ -104,7 +109,8 @@ contract ProofPoolHookTest is Test, Deployers {
 
     /// @notice The AND boundary: still valid in time, but the swap cap is spent.
     function test_discountStopsAtMaxSwaps() public {
-        (LivenessAttestation memory attestation, bytes memory signature) = _attest(verifiedUser, block.timestamp + 1 hours);
+        (LivenessAttestation memory attestation, bytes memory signature) =
+            _attest(verifiedUser, block.timestamp + 1 hours);
         bytes32 digest = oracle.hashAttestation(attestation);
 
         for (uint256 i = 0; i < MAX_SWAPS; i++) {
@@ -126,7 +132,8 @@ contract ProofPoolHookTest is Test, Deployers {
         vm.prank(owner);
         registry.setMaxSwaps(0);
 
-        (LivenessAttestation memory attestation, bytes memory signature) = _attest(verifiedUser, block.timestamp + 1 hours);
+        (LivenessAttestation memory attestation, bytes memory signature) =
+            _attest(verifiedUser, block.timestamp + 1 hours);
 
         for (uint256 i = 0; i < MAX_SWAPS + 2; i++) {
             vm.recordLogs();
@@ -179,7 +186,8 @@ contract ProofPoolHookTest is Test, Deployers {
 
     /// @notice Someone else's valid attestation must not discount your swap.
     function test_attestationForAnotherSubjectGetsHighFee() public {
-        (LivenessAttestation memory attestation, bytes memory signature) = _attest(verifiedUser, block.timestamp + 1 hours);
+        (LivenessAttestation memory attestation, bytes memory signature) =
+            _attest(verifiedUser, block.timestamp + 1 hours);
 
         vm.recordLogs();
         _swap(unverifiedUser, attestation, signature);
@@ -198,7 +206,8 @@ contract ProofPoolHookTest is Test, Deployers {
 
     /// @notice Even a genuinely signed attestation is ignored off the trusted router.
     function test_untrustedRouterCannotUseValidAttestation() public {
-        (LivenessAttestation memory attestation, bytes memory signature) = _attest(verifiedUser, block.timestamp + 1 hours);
+        (LivenessAttestation memory attestation, bytes memory signature) =
+            _attest(verifiedUser, block.timestamp + 1 hours);
 
         vm.recordLogs();
         swap(key, true, -int256(uint256(SWAP_AMOUNT)), abi.encode(verifiedUser, attestation, signature));
@@ -215,22 +224,23 @@ contract ProofPoolHookTest is Test, Deployers {
     }
 
     function test_onlyOwnerCanConfigureRegistry() public {
-        vm.expectRevert(Registry.NotOwner.selector);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
         registry.setMaxSwaps(10);
 
-        vm.expectRevert(Registry.NotOwner.selector);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
         registry.setHook(address(0xDEAD));
     }
 
     function test_onlyOwnerCanRotateTrustedSigner() public {
-        vm.expectRevert(LivenessOracle.NotOwner.selector);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
         oracle.setTrustedSigner(address(0xDEAD));
     }
 
     /// @notice Rotating the signer is the bulk revocation lever: every outstanding
     ///         attestation stops working immediately.
     function test_rotatingSignerInvalidatesOutstandingAttestations() public {
-        (LivenessAttestation memory attestation, bytes memory signature) = _attest(verifiedUser, block.timestamp + 1 hours);
+        (LivenessAttestation memory attestation, bytes memory signature) =
+            _attest(verifiedUser, block.timestamp + 1 hours);
 
         vm.prank(owner);
         oracle.setTrustedSigner(vm.addr(wrongSignerKey));
@@ -247,7 +257,8 @@ contract ProofPoolHookTest is Test, Deployers {
         ProofPoolRouter.ExactInputSingleParams memory params = _exactInputParams();
         params.deadline = 99;
 
-        (LivenessAttestation memory attestation, bytes memory signature) = _attest(verifiedUser, block.timestamp + 1 hours);
+        (LivenessAttestation memory attestation, bytes memory signature) =
+            _attest(verifiedUser, block.timestamp + 1 hours);
 
         vm.prank(verifiedUser);
         vm.expectRevert(abi.encodeWithSelector(ProofPoolRouter.DeadlineExpired.selector, 99));
@@ -278,7 +289,8 @@ contract ProofPoolHookTest is Test, Deployers {
         params.zeroForOne = false;
         params.sqrtPriceLimitX96 = MAX_PRICE_LIMIT;
 
-        (LivenessAttestation memory attestation, bytes memory signature) = _attest(verifiedUser, block.timestamp + 1 hours);
+        (LivenessAttestation memory attestation, bytes memory signature) =
+            _attest(verifiedUser, block.timestamp + 1 hours);
 
         vm.recordLogs();
         vm.prank(verifiedUser);

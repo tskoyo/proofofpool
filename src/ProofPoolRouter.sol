@@ -50,7 +50,7 @@ contract ProofPoolRouter is IUnlockCallback {
     IPoolManager public immutable POOL_MANAGER;
 
     constructor(IPoolManager poolManager) {
-        if (address(poolManager) == address(0)) revert InvalidPoolManager();
+        require(address(poolManager) != address(0), InvalidPoolManager());
         POOL_MANAGER = poolManager;
     }
 
@@ -64,26 +64,28 @@ contract ProofPoolRouter is IUnlockCallback {
         LivenessAttestation calldata attestation,
         bytes calldata signature
     ) external returns (uint256 amountOut) {
-        if (block.timestamp > params.deadline) revert DeadlineExpired(params.deadline);
-        if (params.amountIn == 0) revert InvalidAmount();
-        if (Currency.unwrap(params.key.currency0) == address(0) || Currency.unwrap(params.key.currency1) == address(0))
-        {
-            revert NativeCurrencyUnsupported();
-        }
+        require(block.timestamp <= params.deadline, DeadlineExpired(params.deadline));
+        require(params.amountIn != 0, InvalidAmount());
+        require(
+            Currency.unwrap(params.key.currency0) != address(0) && Currency.unwrap(params.key.currency1) != address(0),
+            NativeCurrencyUnsupported()
+        );
 
         // Without a signature there is nothing for the hook to verify, so send the
         // identity alone and save the caller the attestation calldata.
-        bytes memory hookData = signature.length == 0
-            ? abi.encode(msg.sender)
-            : abi.encode(msg.sender, attestation, signature);
+        bytes memory hookData;
+
+        if (signature.length == 0) {
+            hookData = abi.encode(msg.sender);
+        } else {
+            hookData = abi.encode(msg.sender, attestation, signature);
+        }
 
         bytes memory result =
             POOL_MANAGER.unlock(abi.encode(CallbackData({swapper: msg.sender, hookData: hookData, params: params})));
         (uint256 amountIn, uint256 received) = abi.decode(result, (uint256, uint256));
 
-        if (received < params.amountOutMinimum) {
-            revert TooLittleReceived(params.amountOutMinimum, received);
-        }
+        require(received >= params.amountOutMinimum, TooLittleReceived(params.amountOutMinimum, received));
 
         Currency currencyIn = params.zeroForOne ? params.key.currency0 : params.key.currency1;
         Currency currencyOut = params.zeroForOne ? params.key.currency1 : params.key.currency0;
@@ -95,7 +97,7 @@ contract ProofPoolRouter is IUnlockCallback {
 
     /// @inheritdoc IUnlockCallback
     function unlockCallback(bytes calldata rawData) external returns (bytes memory) {
-        if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
+        require(msg.sender == address(POOL_MANAGER), NotPoolManager());
 
         CallbackData memory data = abi.decode(rawData, (CallbackData));
         ExactInputSingleParams memory params = data.params;
@@ -112,16 +114,14 @@ contract ProofPoolRouter is IUnlockCallback {
 
         int128 inputDelta = params.zeroForOne ? delta.amount0() : delta.amount1();
         int128 outputDelta = params.zeroForOne ? delta.amount1() : delta.amount0();
-        if (inputDelta >= 0 || outputDelta <= 0) {
-            revert UnexpectedSwapDelta(inputDelta, outputDelta);
-        }
+        require(inputDelta < 0 && outputDelta > 0, UnexpectedSwapDelta(inputDelta, outputDelta));
 
         // Safe because the sign checks above establish both values are positive.
         // forge-lint: disable-next-line(unsafe-typecast)
         uint256 amountIn = uint256(-int256(inputDelta));
         // forge-lint: disable-next-line(unsafe-typecast)
         uint256 amountOut = uint256(int256(outputDelta));
-        if (amountIn > params.amountIn) revert UnexpectedSwapDelta(inputDelta, outputDelta);
+        require(amountIn <= params.amountIn, UnexpectedSwapDelta(inputDelta, outputDelta));
 
         Currency currencyIn = params.zeroForOne ? params.key.currency0 : params.key.currency1;
         Currency currencyOut = params.zeroForOne ? params.key.currency1 : params.key.currency0;
@@ -139,9 +139,9 @@ contract ProofPoolRouter is IUnlockCallback {
         (bool success, bytes memory returnData) =
             token.call(abi.encodeCall(IERC20Minimal.transferFrom, (payer, address(POOL_MANAGER), amount)));
 
-        if (!success || (returnData.length != 0 && (returnData.length != 32 || !abi.decode(returnData, (bool))))) {
-            revert TransferFromFailed(token, payer, amount);
-        }
+        bool transferSucceeded =
+            success && (returnData.length == 0 || (returnData.length == 32 && abi.decode(returnData, (bool))));
+        require(transferSucceeded, TransferFromFailed(token, payer, amount));
 
         POOL_MANAGER.settle();
     }

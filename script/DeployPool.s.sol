@@ -43,6 +43,10 @@ import {LivenessOracle} from "../src/LivenessOracle.sol";
 ///      Verify every address below against the source docs before a real
 ///      deployment — this file pins them as of the time this script was written.
 contract DeployPool is Script {
+    error HookAddressMismatch(address expected, address actual);
+    error IdenticalTokenAddresses();
+    error ZeroTokenAddress();
+
     // --- Canonical Uniswap v4 deployment on Sepolia (chain id 11155111) ---
     IPoolManager constant POOL_MANAGER = IPoolManager(0xE03A1074c86CFeDd5C142C4F04F1a1536e203543);
     IPositionManager constant POSITION_MANAGER = IPositionManager(payable(0x429ba70129df741B2Ca2a85BC3A2a3328e5c09b4));
@@ -127,15 +131,15 @@ contract DeployPool is Script {
         );
 
         hook = new ProofPoolHook{salt: salt}(POOL_MANAGER, registry, address(router));
-        require(address(hook) == predicted, "hook address mismatch");
+        require(address(hook) == predicted, HookAddressMismatch(predicted, address(hook)));
     }
 
     /// @dev Sorts the pair by address (v4 requires currency0 < currency1), pairs
     ///      each token with its own seed amount, and derives the opening price
     ///      from their ratio so the pool starts exactly where the liquidity sits.
     function _configurePair(address usdc, address wbtc) internal {
-        require(usdc != address(0) && wbtc != address(0), "token address is zero");
-        require(usdc != wbtc, "TOKEN_USDC and TOKEN_WBTC are the same address");
+        require(usdc != address(0) && wbtc != address(0), ZeroTokenAddress());
+        require(usdc != wbtc, IdenticalTokenAddresses());
 
         (token0, amount0, token1, amount1) = usdc < wbtc
             ? (usdc, USDC_LIQUIDITY_AMOUNT, wbtc, WBTC_LIQUIDITY_AMOUNT)
