@@ -1,0 +1,1 @@
+1. We used `npx skills add uniswap/uniswap-ai --skill swap-integration` command to add the skills to our repo. During the installation, we chose claude code as a code assistant, but the command created `.agents` folder instead of `.claude`
