@@ -4,7 +4,10 @@ import { useState } from "react";
 import Link from "next/link";
 import { IDKitRequestWidget, selfieCheckLegacy } from "@worldcoin/idkit";
 import type { RpContext } from "@worldcoin/idkit-core";
-import { Badge, Button, Card, Icon, Input, StepIndicator, WalletChip } from "@/components/ds";
+import { Badge, Banner, Button, Card, Icon, StepIndicator, WalletChip } from "@/components/ds";
+import { NetworkNotice } from "@/components/wallet-ui";
+import { useWallet } from "@/lib/wallet";
+import { useVerificationStatus } from "@/lib/verification";
 
 const APP_ID = process.env.NEXT_PUBLIC_WLD_APP_ID as `app_${string}`;
 const ACTION = process.env.NEXT_PUBLIC_WLD_ACTION as string;
@@ -15,16 +18,12 @@ const STEPS = ["Connect", "Scan", "Confirm"];
 export default function VerifyPage() {
   const [step, setStep] = useState(0);
   const [open, setOpen] = useState(false);
-  const [address, setAddress] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [rpContext, setRpContext] = useState<RpContext | null>(null);
 
-  const trimmedAddress = address.trim();
-  const isValidAddress = /^0x[a-fA-F0-9]{40}$/.test(trimmedAddress);
-  const addressError =
-    trimmedAddress.length > 0 && !isValidAddress
-      ? "That isn't a valid address — it needs 0x plus 40 hex characters."
-      : undefined;
+  const { address, status, error: walletError, connect, disconnect, switchToTargetChain, isConnected, isWrongChain } =
+    useWallet();
+  const { state: verificationState, isVerified, refresh } = useVerificationStatus(address);
 
   async function fetchRpContext(): Promise<RpContext> {
     const res = await fetch("/api/rp-signature", {
@@ -50,6 +49,12 @@ export default function VerifyPage() {
     } catch {
       setError("Could not reach the signing endpoint. Check the server configuration.");
     }
+  }
+
+  function changeWallet() {
+    disconnect();
+    setStep(0);
+    setError(null);
   }
 
   return (
@@ -94,39 +99,85 @@ export default function VerifyPage() {
           <>
             <Icon name="wallet" size={36} style={{ color: "var(--text-primary)", margin: "0 auto 20px" }} />
             <div style={{ fontWeight: 600, fontSize: 20, marginBottom: 8 }}>Connect your wallet</div>
-            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 28 }}>
-              ProofPool registers your verification on-chain, tied to this wallet address.
+            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 24 }}>
+              ProofPool registers your verification on-chain, tied to the wallet you connect here.
             </p>
-            <Input
-              label="Wallet address to verify"
-              placeholder="0x…"
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              error={addressError}
-              style={{ marginBottom: 12, textAlign: "left" }}
-            />
-            <p
-              style={{
-                color: "var(--text-tertiary)",
-                fontSize: "var(--text-caption)",
-                textAlign: "left",
-                margin: "0 0 20px",
-              }}
-            >
-              Paste the wallet you want to swap from. Verification is bound to this address.
-            </p>
-            <Button
-              variant="accent"
-              style={{ width: "100%" }}
-              disabled={!isValidAddress}
-              onClick={() => setStep(1)}
-            >
-              Connect wallet
-            </Button>
+
+            {!isConnected && (
+              <>
+                {status === "unavailable" ? (
+                  <>
+                    <Banner tone="warning" title="No wallet detected" style={{ textAlign: "left" }}>
+                      This browser has no injected wallet. Install one, then reload this page.
+                    </Banner>
+                    <a
+                      href="https://metamask.io/download/"
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      style={{ textDecoration: "none", display: "block", marginTop: 20 }}
+                    >
+                      <Button variant="accent" style={{ width: "100%" }}>
+                        Install a wallet
+                      </Button>
+                    </a>
+                  </>
+                ) : (
+                  <Button
+                    variant="accent"
+                    style={{ width: "100%" }}
+                    disabled={status === "connecting" || status === "loading"}
+                    onClick={connect}
+                  >
+                    {status === "connecting" ? "Check your wallet…" : "Connect wallet"}
+                  </Button>
+                )}
+                {walletError && (
+                  <p style={{ color: "var(--status-error)", fontSize: 13, margin: "16px 0 0" }}>{walletError}</p>
+                )}
+              </>
+            )}
+
+            {isConnected && address && (
+              <>
+                <WalletChip address={address} verified={isVerified} style={{ margin: "0 auto 20px" }} />
+
+                <NetworkNotice
+                  isWrongChain={isWrongChain}
+                  onSwitch={switchToTargetChain}
+                  style={{ textAlign: "left", marginBottom: 20 }}
+                />
+
+                {isVerified ? (
+                  <>
+                    <Banner tone="success" title="Already verified" style={{ textAlign: "left" }}>
+                      This wallet is registered on-chain and already pays the 0.05% fee.
+                    </Banner>
+                    <Link href="/swap" style={{ textDecoration: "none", display: "block", marginTop: 20 }}>
+                      <Button variant="accent" style={{ width: "100%" }}>
+                        Start swapping
+                      </Button>
+                    </Link>
+                  </>
+                ) : (
+                  <Button
+                    variant="accent"
+                    style={{ width: "100%" }}
+                    disabled={isWrongChain}
+                    onClick={() => setStep(1)}
+                  >
+                    Continue
+                  </Button>
+                )}
+
+                <Button variant="ghost" size="s" style={{ marginTop: 12 }} onClick={changeWallet}>
+                  Use a different wallet
+                </Button>
+              </>
+            )}
           </>
         )}
 
-        {step === 1 && (
+        {step === 1 && address && (
           <>
             <Icon name="scan-face" size={36} style={{ color: "var(--text-primary)", margin: "0 auto 20px" }} />
             <div style={{ fontWeight: 600, fontSize: 20, marginBottom: 8 }}>Verify with World ID</div>
@@ -134,41 +185,70 @@ export default function VerifyPage() {
               Complete a Selfie Check in the World App. This proves you&rsquo;re a unique human &mdash; it never
               links your identity to your wallet.
             </p>
-            <WalletChip address={trimmedAddress} style={{ margin: "0 auto 24px" }} />
+            <WalletChip address={address} style={{ margin: "0 auto 24px" }} />
             <Button variant="accent" style={{ width: "100%" }} onClick={openWorldApp}>
               Open World App
             </Button>
-            {error && (
-              <p style={{ color: "var(--status-error)", fontSize: 13, margin: "16px 0 0" }}>{error}</p>
-            )}
+            {error && <p style={{ color: "var(--status-error)", fontSize: 13, margin: "16px 0 0" }}>{error}</p>}
             <Button variant="ghost" size="s" style={{ marginTop: 12 }} onClick={() => setStep(0)}>
-              Use a different address
+              Back
             </Button>
           </>
         )}
 
         {step === 2 && (
           <>
-            <Icon
-              name="check-circle-2"
-              size={40}
-              style={{ color: "var(--accent-primary)", margin: "0 auto 20px" }}
-            />
-            <div style={{ fontWeight: 600, fontSize: 20, marginBottom: 8 }}>You&rsquo;re verified</div>
-            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 20 }}>
-              Your wallet is registered as human-verified on-chain.
-            </p>
-            <Badge tone="success">0.05% fee unlocked</Badge>
-            <Link href="/swap" style={{ textDecoration: "none", display: "block", marginTop: 24 }}>
-              <Button variant="accent" style={{ width: "100%" }}>
-                Start swapping
-              </Button>
-            </Link>
+            {isVerified ? (
+              <>
+                <Icon
+                  name="check-circle-2"
+                  size={40}
+                  style={{ color: "var(--accent-primary)", margin: "0 auto 20px" }}
+                />
+                <div style={{ fontWeight: 600, fontSize: 20, marginBottom: 8 }}>You&rsquo;re verified</div>
+                <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 20 }}>
+                  Your wallet is registered as human-verified on-chain.
+                </p>
+                <Badge tone="success">0.05% fee unlocked</Badge>
+                <Link href="/swap" style={{ textDecoration: "none", display: "block", marginTop: 24 }}>
+                  <Button variant="accent" style={{ width: "100%" }}>
+                    Start swapping
+                  </Button>
+                </Link>
+              </>
+            ) : (
+              <>
+                <Icon name="scan-face" size={36} style={{ color: "var(--text-primary)", margin: "0 auto 20px" }} />
+                <div style={{ fontWeight: 600, fontSize: 20, marginBottom: 8 }}>Proof accepted</div>
+                <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 20 }}>
+                  Your Selfie Check passed and the registration transaction has been submitted. The fee tier
+                  changes once it&rsquo;s mined &mdash; that usually takes a few seconds.
+                </p>
+                <Button
+                  variant="accent"
+                  style={{ width: "100%" }}
+                  disabled={verificationState === "checking"}
+                  onClick={() => void refresh()}
+                >
+                  {verificationState === "checking" ? "Checking…" : "Check on-chain status"}
+                </Button>
+                {verificationState === "unconfigured" && (
+                  <p style={{ color: "var(--text-tertiary)", fontSize: 13, margin: "16px 0 0" }}>
+                    NEXT_PUBLIC_REGISTRY_ADDRESS isn&rsquo;t set, so status can&rsquo;t be read from the contract.
+                  </p>
+                )}
+                {verificationState === "error" && (
+                  <p style={{ color: "var(--status-error)", fontSize: 13, margin: "16px 0 0" }}>
+                    Could not reach the registry contract. Check NEXT_PUBLIC_RPC_URL.
+                  </p>
+                )}
+              </>
+            )}
           </>
         )}
       </Card>
 
-      {rpContext && (
+      {rpContext && address && (
         <IDKitRequestWidget
           open={open}
           onOpenChange={setOpen}
@@ -176,7 +256,7 @@ export default function VerifyPage() {
           action={ACTION}
           rp_context={rpContext}
           allow_legacy_proofs={true}
-          preset={selfieCheckLegacy({ signal: trimmedAddress })}
+          preset={selfieCheckLegacy({ signal: address })}
           handleVerify={async (result) => {
             if (result.protocol_version !== "3.0") {
               throw new Error(`unexpected protocol version: ${result.protocol_version}`);
@@ -188,7 +268,7 @@ export default function VerifyPage() {
               method: "POST",
               headers: { "content-type": "application/json" },
               body: JSON.stringify({
-                signal: trimmedAddress,
+                signal: address,
                 idkitResponse: {
                   proof: selfie.proof,
                   merkle_root: selfie.merkle_root,
@@ -206,6 +286,7 @@ export default function VerifyPage() {
           onSuccess={() => {
             setError(null);
             setStep(2);
+            void refresh();
           }}
           onError={(errorCode) => setError(`Verification failed: ${errorCode}`)}
         />
