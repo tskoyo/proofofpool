@@ -7,23 +7,27 @@ export interface Token {
 }
 
 /**
- * The pair `script/DeployPool.s.sol` actually initialises on Sepolia. These are
- * the same addresses the deploy script pins — if you change them there, change
- * them here, or the UI will quote a pool that doesn't exist.
+ * The demo pair deployed by `script/DeployTestTokens.s.sol` and pooled by
+ * `script/DeployPool.s.sol` on Sepolia. These must stay in sync with the
+ * TOKEN_USDC / TOKEN_WBTC values in the root .env — redeploy the tokens and the
+ * UI will quote a pool that doesn't exist.
+ *
+ * Decimals mirror the assets they stand in for (USDC 6, WBTC 8), so anything
+ * converting to base units must read them from here rather than assuming 18.
  */
-export const WETH: Token = {
-  symbol: "WETH",
-  address: "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14",
-  decimals: 18,
+export const WBTC: Token = {
+  symbol: "MyWBTC",
+  address: "0x455f89677e869fbb096b53ce611ab1fb580c951f",
+  decimals: 8,
 };
 
 export const USDC: Token = {
-  symbol: "USDC",
-  address: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+  symbol: "MyUSDC",
+  address: "0x936dd0f62ea658f9f0e275fbc7324f5552dc2c91",
   decimals: 6,
 };
 
-export const TOKENS: Token[] = [USDC, WETH];
+export const TOKENS: Token[] = [USDC, WBTC];
 
 export function tokenBySymbol(symbol: string): Token {
   return TOKENS.find((t) => t.symbol === symbol) ?? USDC;
@@ -38,12 +42,13 @@ export function counterpart(token: Token): Token {
 
 /**
  * Display formatting only — never use this to build a transaction amount.
- * 18-decimal tokens get more room because their fee slices are tiny.
+ * High-decimal tokens get more room because their fee slices are tiny: 0.30%
+ * of 0.1 MyWBTC is 0.0003, which rounds to nothing at 4 decimal places.
  */
 export function formatAmount(value: number, token: Token): string {
   if (!Number.isFinite(value)) return "—";
   return value.toLocaleString("en-US", {
     minimumFractionDigits: 2,
-    maximumFractionDigits: token.decimals >= 18 ? 6 : 4,
+    maximumFractionDigits: token.decimals >= 8 ? 6 : 4,
   });
 }

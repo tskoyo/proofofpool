@@ -16,6 +16,7 @@ import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol
 import {Actions} from "v4-periphery/src/libraries/Actions.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
+import {FixedPointMathLib} from "solmate/src/utils/FixedPointMathLib.sol";
 
 import {ProofPoolHook} from "../src/ProofPoolHook.sol";
 import {ProofPoolRouter} from "../src/ProofPoolRouter.sol";
@@ -29,9 +30,15 @@ import {Registry} from "../src/Registry.sol";
 ///     --rpc-url $SEPOLIA_RPC_URL --broadcast --verify -vvvv
 ///
 /// @dev Required env vars: PRIVATE_KEY, WORLD_ID_APP_ID, WORLD_ID_ACTION_ID,
-///      REGISTRY_ATTESTER. `REGISTRY_ATTESTER` is the backend's public address —
-///      the only address allowed to call `Registry.registerVerifiedHuman` after
-///      verifying a Selfie Check proof off-chain (see web/ for that backend).
+///      REGISTRY_ATTESTER, TOKEN_USDC, TOKEN_WBTC.
+///
+///      `REGISTRY_ATTESTER` is the backend's public address — the only address
+///      allowed to call `Registry.registerVerifiedHuman` after verifying a
+///      Selfie Check proof off-chain (see web/ for that backend).
+///
+///      `TOKEN_USDC` / `TOKEN_WBTC` are the pair this pool trades; run
+///      script/DeployTestTokens.s.sol first and use the addresses it prints.
+///
 ///      Verify every address below against the source docs before a real
 ///      deployment — this file pins them as of the time this script was written.
 contract DeployPool is Script {
@@ -40,24 +47,33 @@ contract DeployPool is Script {
     IPositionManager constant POSITION_MANAGER = IPositionManager(payable(0x429ba70129df741B2Ca2a85BC3A2a3328e5c09b4));
     IAllowanceTransfer constant PERMIT2 = IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3);
 
-    // --- Sepolia test tokens ---
-    address constant WETH = 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14;
-    address constant USDC = 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238;
+    /// @dev `new X{salt: ...}` inside a forge script is routed through this proxy
+    ///      rather than deployed straight from the EOA, so the hook address must
+    ///      be mined against it. Mining against msg.sender yields an address whose
+    ///      flag bits don't match and PoolManager reverts HookAddressNotValid.
+    address constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
     int24 constant TICK_SPACING = 60;
-    // Illustrative starting price: 1 WETH = 3000 USDC. Adjust to the real
-    // market price at deploy time if it matters for your demo.
-    uint160 constant INITIAL_SQRT_PRICE_X96 = 1446501726624926496477173928747177;
 
-    // How much of each token to seed as initial liquidity. WETH has 18
-    // decimals, USDC has 6.
-    uint256 constant WETH_LIQUIDITY_AMOUNT = 0.01 ether;
-    uint256 constant USDC_LIQUIDITY_AMOUNT = 30e6;
+    // Initial liquidity, in each token's own base units. Their ratio *is* the
+    // pool's starting price — 10,000 MyUSDC against 0.1 MyWBTC implies
+    // 1 MyWBTC = 100,000 MyUSDC — so changing one changes the opening price.
+    uint256 constant USDC_LIQUIDITY_AMOUNT = 10_000e6; // MyUSDC, 6 decimals
+    uint256 constant WBTC_LIQUIDITY_AMOUNT = 0.1e8; // MyWBTC, 8 decimals
+
+    // Set in run() from TOKEN_USDC / TOKEN_WBTC, sorted as v4 requires.
+    address token0;
+    address token1;
+    uint256 amount0;
+    uint256 amount1;
+    uint160 initialSqrtPriceX96;
 
     function run() external {
         string memory appId = vm.envString("WORLD_ID_APP_ID");
         string memory actionId = vm.envString("WORLD_ID_ACTION_ID");
         address attester = vm.envAddress("REGISTRY_ATTESTER");
+
+        _configurePair(vm.envAddress("TOKEN_USDC"), vm.envAddress("TOKEN_WBTC"));
 
         vm.startBroadcast();
 
@@ -71,7 +87,7 @@ contract DeployPool is Script {
         console2.log("ProofPoolHook deployed at", address(hook));
 
         PoolKey memory key = _buildPoolKey(hook);
-        POOL_MANAGER.initialize(key, INITIAL_SQRT_PRICE_X96);
+        POOL_MANAGER.initialize(key, initialSqrtPriceX96);
         console2.log("Pool initialized");
 
         _addLiquidity(key);
@@ -85,7 +101,7 @@ contract DeployPool is Script {
     function _deployHook(Registry registry, ProofPoolRouter router) internal returns (ProofPoolHook hook) {
         uint160 flags = uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG);
         (address predicted, bytes32 salt) = HookMiner.find(
-            msg.sender,
+            CREATE2_DEPLOYER,
             flags,
             type(ProofPoolHook).creationCode,
             abi.encode(address(POOL_MANAGER), address(registry), address(router))
@@ -95,10 +111,27 @@ contract DeployPool is Script {
         require(address(hook) == predicted, "hook address mismatch");
     }
 
-    /// @dev WETH/USDC sorted by address so currency0 < currency1, as v4 requires.
-    function _buildPoolKey(ProofPoolHook hook) internal pure returns (PoolKey memory) {
-        (address token0, address token1) = USDC < WETH ? (USDC, WETH) : (WETH, USDC);
+    /// @dev Sorts the pair by address (v4 requires currency0 < currency1), pairs
+    ///      each token with its own seed amount, and derives the opening price
+    ///      from their ratio so the pool starts exactly where the liquidity sits.
+    function _configurePair(address usdc, address wbtc) internal {
+        require(usdc != address(0) && wbtc != address(0), "token address is zero");
+        require(usdc != wbtc, "TOKEN_USDC and TOKEN_WBTC are the same address");
 
+        (token0, amount0, token1, amount1) = usdc < wbtc
+            ? (usdc, USDC_LIQUIDITY_AMOUNT, wbtc, WBTC_LIQUIDITY_AMOUNT)
+            : (wbtc, WBTC_LIQUIDITY_AMOUNT, usdc, USDC_LIQUIDITY_AMOUNT);
+
+        // sqrtPriceX96 = sqrt(amount1 / amount0) * 2**96, rearranged to keep the
+        // division inside the square root and avoid truncating to zero.
+        initialSqrtPriceX96 = uint160(FixedPointMathLib.sqrt((amount1 << 192) / amount0));
+
+        console2.log("currency0", token0, amount0);
+        console2.log("currency1", token1, amount1);
+        console2.log("initial sqrtPriceX96", initialSqrtPriceX96);
+    }
+
+    function _buildPoolKey(ProofPoolHook hook) internal view returns (PoolKey memory) {
         return PoolKey({
             currency0: Currency.wrap(token0),
             currency1: Currency.wrap(token1),
@@ -112,12 +145,10 @@ contract DeployPool is Script {
         int24 tickLower = TickMath.minUsableTick(TICK_SPACING);
         int24 tickUpper = TickMath.maxUsableTick(TICK_SPACING);
 
-        (uint256 amount0Desired, uint256 amount1Desired) = Currency.unwrap(key.currency0) == WETH
-            ? (WETH_LIQUIDITY_AMOUNT, USDC_LIQUIDITY_AMOUNT)
-            : (USDC_LIQUIDITY_AMOUNT, WETH_LIQUIDITY_AMOUNT);
+        (uint256 amount0Desired, uint256 amount1Desired) = (amount0, amount1);
 
         uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
-            INITIAL_SQRT_PRICE_X96,
+            initialSqrtPriceX96,
             TickMath.getSqrtPriceAtTick(tickLower),
             TickMath.getSqrtPriceAtTick(tickUpper),
             amount0Desired,
