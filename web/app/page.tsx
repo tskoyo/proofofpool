@@ -63,25 +63,13 @@ export default function Home() {
           allow_legacy_proofs={true}
           preset={selfieCheckLegacy({ signal: address })}
           handleVerify={async (result) => {
-            if (result.protocol_version !== "3.0") {
-              throw new Error(`unexpected protocol version: ${result.protocol_version}`);
-            }
-            const selfie = result.responses.find((r) => r.identifier === "selfie");
-            if (!selfie) throw new Error("no selfie credential in response");
-
             setStatus("Verifying on-chain...");
             const res = await fetch("/api/verify", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                signal: address,
-                idkitResponse: {
-                  proof: selfie.proof,
-                  merkle_root: selfie.merkle_root,
-                  nullifier_hash: selfie.nullifier,
-                  verification_level: selfie.identifier,
-                },
-              }),
+              // Forward the IDKit result as-is — the v4 verify endpoint expects
+              // the exact object IDKit returned, not a reshaped/renamed one.
+              body: JSON.stringify({ signal: address, result }),
             });
 
             if (!res.ok) {
