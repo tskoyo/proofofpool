@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { createPublicClient, http } from "viem";
+import { useCallback, useEffect, useState } from "react";
+import { createPublicClient, encodeAbiParameters, http, keccak256, parseAbiParameters } from "viem";
+import { TOKENS } from "./tokens";
 import { TARGET_CHAIN } from "./wallet";
 
 export const hookAbi = [
@@ -19,9 +20,24 @@ export const hookAbi = [
     inputs: [],
     outputs: [{ name: "", type: "uint24" }],
   },
+  {
+    type: "function",
+    name: "demoPoolStats",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [
+      { name: "totalSwaps", type: "uint256" },
+      { name: "verifiedSwaps", type: "uint256" },
+      { name: "unverifiedSwaps", type: "uint256" },
+      { name: "verifiedInputVolume0", type: "uint256" },
+      { name: "verifiedInputVolume1", type: "uint256" },
+      { name: "unverifiedInputVolume0", type: "uint256" },
+      { name: "unverifiedInputVolume1", type: "uint256" },
+    ],
+  },
 ] as const;
 
-const HOOK_ADDRESS = process.env.NEXT_PUBLIC_HOOK_ADDRESS as `0x${string}` | undefined;
+export const HOOK_ADDRESS = process.env.NEXT_PUBLIC_HOOK_ADDRESS as `0x${string}` | undefined;
 
 const publicClient = createPublicClient({
   chain: TARGET_CHAIN,
@@ -34,6 +50,87 @@ const publicClient = createPublicClient({
  * it's showing rather than passing these off as live readings.
  */
 const SOURCE_DEFAULTS = { verified: 500, unverified: 3000 } as const;
+const DYNAMIC_FEE_FLAG = 0x800000;
+const TICK_SPACING = 60;
+
+const [CURRENCY0, CURRENCY1] = TOKENS.map((token) => token.address).sort((a, b) =>
+  a.toLowerCase() < b.toLowerCase() ? -1 : 1,
+);
+
+export const DEMO_TOKEN0 = TOKENS.find((token) => token.address === CURRENCY0)!;
+export const DEMO_TOKEN1 = TOKENS.find((token) => token.address === CURRENCY1)!;
+
+/**
+ * Mirrors PoolIdLibrary.toId: keccak256(abi.encode(poolKey)). PoolKey is fully
+ * static, so encoding its five fields produces the same bytes as encoding the
+ * Solidity struct.
+ */
+export function demoPoolId() {
+  if (!HOOK_ADDRESS) return undefined;
+  return keccak256(
+    encodeAbiParameters(
+      parseAbiParameters("address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks"),
+      [CURRENCY0, CURRENCY1, DYNAMIC_FEE_FLAG, TICK_SPACING, HOOK_ADDRESS],
+    ),
+  );
+}
+
+export interface DemoPoolStats {
+  totalSwaps: bigint;
+  verifiedSwaps: bigint;
+  unverifiedSwaps: bigint;
+  verifiedInputVolume0: bigint;
+  verifiedInputVolume1: bigint;
+  unverifiedInputVolume0: bigint;
+  unverifiedInputVolume1: bigint;
+}
+
+export type DemoStatsState = "unconfigured" | "loading" | "live" | "error";
+
+export function useDemoPoolStats() {
+  const poolId = demoPoolId();
+  const [stats, setStats] = useState<DemoPoolStats | null>(null);
+  const [state, setState] = useState<DemoStatsState>(poolId ? "loading" : "unconfigured");
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!HOOK_ADDRESS || !poolId) {
+      setState("unconfigured");
+      return;
+    }
+
+    try {
+      const result = await publicClient.readContract({
+        address: HOOK_ADDRESS,
+        abi: hookAbi,
+        functionName: "demoPoolStats",
+        args: [poolId],
+      });
+
+      setStats({
+        totalSwaps: result[0],
+        verifiedSwaps: result[1],
+        unverifiedSwaps: result[2],
+        verifiedInputVolume0: result[3],
+        verifiedInputVolume1: result[4],
+        unverifiedInputVolume0: result[5],
+        unverifiedInputVolume1: result[6],
+      });
+      setUpdatedAt(new Date());
+      setState("live");
+    } catch {
+      setState("error");
+    }
+  }, [poolId]);
+
+  useEffect(() => {
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 15_000);
+    return () => window.clearInterval(interval);
+  }, [refresh]);
+
+  return { stats, state, updatedAt, refresh, poolId };
+}
 
 export type FeeSource = "chain" | "source-defaults" | "error";
 

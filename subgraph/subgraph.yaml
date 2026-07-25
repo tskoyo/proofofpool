@@ -6,21 +6,24 @@ dataSources:
     name: ProofPoolHook
     network: sepolia
     source:
-      address: "0xa12E7664e24A3444330712c13Bed43840F9C8080"
+      address: "0xA98F33C701F0D206e3f940810e2135d930fc8080"
       abi: ProofPoolHook
-      startBlock: 11348716
+      startBlock: 11349795
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
       language: wasm/assemblyscript
       entities:
+        - Pool
         - Swap
         - Swapper
+        - SwapRecord
+        - TransactionPoolCursor
       abis:
         - name: ProofPoolHook
           file: ./abis/ProofPoolHook.json
       eventHandlers:
-        - event: SwapPriced(indexed address,bool,uint24,int256)
+        - event: SwapPriced(indexed bytes32,indexed address,bool,uint24,bool,int256,bytes32)
           handler: handleSwapPriced
       file: ./src/hook.ts
 
@@ -28,36 +31,38 @@ dataSources:
     name: ProofPoolRouter
     network: sepolia
     source:
-      address: "0x21590E34584D9478fBb3a5aFcB7bd4D0075B33F8"
+      address: "0x60a058a835da19Ba8db84602b3474d999985B76F"
       abi: ProofPoolRouter
-      startBlock: 11348716
+      startBlock: 11349795
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
       language: wasm/assemblyscript
       entities:
+        - Pool
         - Swap
+        - TransactionPoolCursor
       abis:
         - name: ProofPoolRouter
           file: ./abis/ProofPoolRouter.json
       eventHandlers:
         - event: SwapExecuted(indexed address,indexed address,indexed address,uint256,uint256)
           handler: handleSwapExecuted
-          receipt: true
       file: ./src/router.ts
 
   - kind: ethereum/contract
     name: Registry
     network: sepolia
     source:
-      address: "0x70B27D4b26E1995fd6ebeeC96cCb05d07D317a42"
+      address: "0xA8B46486c2AC0Cec419b3e205aAd9AaC4c33C7D4"
       abi: Registry
-      startBlock: 11348716
+      startBlock: 11349795
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
       language: wasm/assemblyscript
       entities:
+        - DiscountedSwapUse
         - SwapRecord
         - RegistryConfig
       abis:

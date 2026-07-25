@@ -61,10 +61,23 @@ contract DeployPool is Script {
     int24 constant TICK_SPACING = 60;
 
     // Initial liquidity, in each token's own base units. Their ratio *is* the
-    // pool's starting price — 10,000 MyUSDC against 0.1 MyWBTC implies
-    // 1 MyWBTC = 100,000 MyUSDC — so changing one changes the opening price.
-    uint256 constant USDC_LIQUIDITY_AMOUNT = 10_000e6; // MyUSDC, 6 decimals
-    uint256 constant WBTC_LIQUIDITY_AMOUNT = 0.1e8; // MyWBTC, 8 decimals
+    // pool's starting price — 500,000 MyUSDC against 5 MyWBTC implies
+    // 1 MyWBTC = 100,000 MyUSDC — so scale both together or the opening price
+    // moves with them.
+    //
+    // Sized for the seeded demo history, not for hand-testing: script/
+    // seed-traffic.sh puts ~400 swaps through this pool, and a whale swap is 20x
+    // the 10 MyUSDC base size. At the old 10,000 / 0.1 depth a single whale was
+    // 2% of the pool and the run walked the price somewhere absurd, which
+    // distorts every fee number the dashboard is built on. Here a whale is
+    // ~0.04%. Liquidity is full-range, so depth near the price is thinner than
+    // the nominal amounts suggest — that is already accounted for.
+    //
+    // DeployTestTokens mints the deployer 10,000,000 MyUSDC and 1,000 MyWBTC,
+    // so this spends 5% and 0.5% of that. script/deploy-sepolia.sh checks the
+    // balance before broadcasting; its *_NEEDED constants must match these.
+    uint256 constant USDC_LIQUIDITY_AMOUNT = 500_000e6; // MyUSDC, 6 decimals
+    uint256 constant WBTC_LIQUIDITY_AMOUNT = 5e8; // MyWBTC, 8 decimals
 
     // Set in run() from TOKEN_USDC / TOKEN_WBTC, sorted as v4 requires.
     address token0;

@@ -1,27 +1,48 @@
 import { SwapExecuted } from "../generated/ProofPoolRouter/ProofPoolRouter"
-import { Swap } from "../generated/schema"
+import { Pool, Swap, TransactionPoolCursor } from "../generated/schema"
+import {
+  DEMO_CURRENCY0,
+  DEMO_CURRENCY1,
+  DEMO_POOL_ID,
+} from "./constants"
 
-// SwapPriced (hook) and SwapExecuted (router) fire in the same transaction —
-// the hook's beforeSwap runs inside the router's unlock callback. The Swap
-// entity is keyed by tx hash + the hook's log index, so find it by scanning
-// this transaction's logs for the one the hook handler already created.
+function matchesRouterEvent(swap: Swap, event: SwapExecuted): boolean {
+  if (swap.routerExecuted || !swap.swapper.equals(event.params.swapper)) {
+    return false
+  }
+
+  let expectedTokenIn = swap.zeroForOne ? DEMO_CURRENCY0 : DEMO_CURRENCY1
+  let expectedTokenOut = swap.zeroForOne ? DEMO_CURRENCY1 : DEMO_CURRENCY0
+  return (
+    expectedTokenIn.equals(event.params.tokenIn) &&
+    expectedTokenOut.equals(event.params.tokenOut)
+  )
+}
+
+// SwapPriced fires before SwapExecuted. Keep their hook-created IDs in an
+// ordered transaction + pool queue, then enrich the matching ordinal here.
+// Wallet and token checks prevent an unrelated hook swap in the transaction
+// from being attached to this Router event.
 export function handleSwapExecuted(event: SwapExecuted): void {
-  let txHash = event.transaction.hash
-  let receipt = event.receipt
-  if (receipt == null) {
+  let cursor = TransactionPoolCursor.load(event.transaction.hash.concat(DEMO_POOL_ID))
+  let pool = Pool.load(DEMO_POOL_ID)
+  if (cursor == null || pool == null) {
     return
   }
 
-  for (let i = 0; i < receipt.logs.length; i++) {
-    let log = receipt.logs[i]
-    let id = txHash.concatI32(log.logIndex.toI32())
-    let swap = Swap.load(id)
-    if (swap != null) {
+  let swapIds = cursor.swapIds
+  for (let i = cursor.nextRouterOrdinal; i < swapIds.length; i++) {
+    let swap = Swap.load(swapIds[i])
+    if (swap != null && matchesRouterEvent(swap, event)) {
       swap.tokenIn = event.params.tokenIn
       swap.tokenOut = event.params.tokenOut
       swap.amountIn = event.params.amountIn
       swap.amountOut = event.params.amountOut
+      swap.routerExecuted = true
       swap.save()
+
+      cursor.nextRouterOrdinal = i + 1
+      cursor.save()
       return
     }
   }

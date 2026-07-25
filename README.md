@@ -44,16 +44,21 @@ This is what Selfie Check can actually back — liveness at signing time — and
 mechanism claims nothing more. See [Known limitations](#known-limitations).
 
 **3. The Graph + Pool Guardian agent** — *in progress.*
-The hook stores no aggregates and `Registry` keeps only per-digest counts, so
-"what share of volume is verified" and "how much did anonymous flow pay LPs" are
-not answerable by any RPC read. A subgraph indexes `SwapPriced` and
-`DiscountedSwapRecorded` to answer them, and an agent reasons over that data —
-flags suspicious cadence, summarizes fee flow, answers follow-ups — rather than
+For the demo, the hook keeps a small set of explicitly `Demo only` per-pool
+aggregates: swap counts and requested exact-input volume split by fee tier and
+input token. That makes headline numbers available through an RPC read while
+the full data path is being built. These are not settled-volume accounting:
+exact-output volume is excluded, and the fields should be removed after the
+demo. A subgraph indexes `SwapPriced` and `DiscountedSwapRecorded` for durable,
+transaction-level analytics, and an agent reasons over that data — flags
+suspicious cadence, summarizes fee flow, answers follow-ups — rather than
 printing raw rows. A plain subgraph would not be worth building on its own.
 
-Status: the hook's event surface is in place (see
-[DESIGN.md](./DESIGN.md#event-surface-for-indexers)). Subgraph, dashboard, and
-agent are not built yet.
+Status: the event surface (see
+[DESIGN.md](./DESIGN.md#event-surface-for-indexers)) and the
+[subgraph](#subgraph) are deployed and indexing. The agent and its dashboard are
+not built yet — and they are the part that counts for the prize, since a plain
+subgraph does not qualify on its own.
 
 ## Known limitations
 
@@ -91,6 +96,101 @@ The sustained rate is still `maxSwaps` per window. The alternative — expiring
 after one window — would hand somebody who verifies near a boundary an
 attestation lasting seconds, so the overlap is the deliberate trade.
 
+## Deployments — Ethereum Sepolia (chain id 11155111)
+
+All deployed in block **11349795**. Use that as the subgraph `startBlock`: no
+swap exists before it, so starting earlier only costs sync time.
+
+| Contract | Address |
+|---|---|
+| `ProofPoolHook` | [`0xA98F33C701F0D206e3f940810e2135d930fc8080`](https://sepolia.etherscan.io/address/0xA98F33C701F0D206e3f940810e2135d930fc8080) |
+| `Registry` | [`0xA8B46486c2AC0Cec419b3e205aAd9AaC4c33C7D4`](https://sepolia.etherscan.io/address/0xA8B46486c2AC0Cec419b3e205aAd9AaC4c33C7D4) |
+| `LivenessOracle` | [`0x13E392859360ff3b6F05EbdAde5913A67F877c84`](https://sepolia.etherscan.io/address/0x13E392859360ff3b6F05EbdAde5913A67F877c84) |
+| `ProofPoolRouter` | [`0x60a058a835da19Ba8db84602b3474d999985B76F`](https://sepolia.etherscan.io/address/0x60a058a835da19Ba8db84602b3474d999985B76F) |
+
+The hook address is not arbitrary — its low bits encode the `beforeSwap`
+permission, mined as a CREATE2 salt. Redeploying the hook therefore always
+produces a new address, hence a new `PoolKey`, hence a different pool.
+
+### Demo tokens
+
+Throwaway ERC-20s with `mint` public and unrestricted, so anyone can fund a
+wallet to try the pool. They mirror the decimals of the assets they stand in for
+so the pool math and UI formatting behave like the real pair.
+
+| Token | Address | Decimals |
+|---|---|---|
+| `MyWBTC` (currency0) | [`0x455F89677E869FbB096b53Ce611ab1FB580c951F`](https://sepolia.etherscan.io/address/0x455F89677E869FbB096b53Ce611ab1FB580c951F) | 8 |
+| `MyUSDC` (currency1) | [`0x936dD0f62ea658F9F0E275FBC7324F5552DC2C91`](https://sepolia.etherscan.io/address/0x936dD0f62ea658F9F0E275FBC7324F5552DC2C91) | 6 |
+
+Order is not cosmetic: v4 requires `currency0 < currency1` by address, and the
+`PoolKey` — so the pool id — depends on it.
+
+### Pool
+
+```
+poolId       0xb5490fe81d9106e211b846e99f7fc153c18841c809502c88d1c2d4da6209de86
+fee          0x800000  (DYNAMIC_FEE_FLAG — the hook overrides the fee per swap)
+tickSpacing  60
+liquidity    500,000 MyUSDC / 5 MyWBTC, full range
+```
+
+The pool **must** be initialized with `DYNAMIC_FEE_FLAG`, or `PoolManager`
+silently ignores the hook's fee override and both tiers pay the static fee.
+
+Built against the canonical Uniswap v4 deployment on Sepolia:
+`PoolManager` `0xE03A1074c86CFeDd5C142C4F04F1a1536e203543`,
+`PositionManager` `0x429ba70129df741B2Ca2a85BC3A2a3328e5c09b4`,
+`Permit2` `0x000000000022D473030F116dDEE9F6B43aC78BA3`.
+
+Run [`./script/check-deploy.sh`](./script/check-deploy.sh) to verify a
+deployment landed and is wired — it reads the broadcast file back, checks every
+transaction on-chain, and confirms the pool has liquidity.
+
+### Subgraph
+
+```
+https://api.studio.thegraph.com/query/1756994/proof-pool-sepolia/0.1.1
+```
+
+Indexes `SwapPriced` from the hook, `SwapExecuted` from the router, and
+`DiscountedSwapRecorded` / `HookUpdated` / `MaxSwapsUpdated` from the Registry,
+all from `startBlock: 11349795`. Source in [subgraph/](./subgraph).
+
+The query URL is version-pinned, so a redeploy changes it — read it from an
+environment variable rather than hardcoding it.
+
+Entities worth knowing:
+
+- **`Pool`** — running totals: swap counts and requested exact-input volume,
+  split by fee tier and input currency. Deliberately field-for-field with
+  `ProofPoolHook.demoPoolStats`, so the indexed numbers can be checked against
+  the contract's own.
+- **`Swap`** — one per priced swap, with the fee tier applied, direction, and
+  the attestation digest that paid for any discount. `amountIn`/`amountOut` are
+  settled amounts joined from the router, and are null for swaps that bypassed
+  it (`routerExecuted: false`).
+- **`Swapper`** — per-wallet totals, the basis for cadence analysis.
+- **`SwapRecord`** / **`DiscountedSwapUse`** — an attestation's allowance
+  draining, keyed by EIP-712 digest.
+
+The history it indexes is **seeded synthetic testnet traffic**, not organic
+usage — see [SETUP.md](./SETUP.md#6-seed-the-demo-traffic).
+
+## Team
+
+| | Telegram |
+|---|---|
+| tskoyo | [@tskoyo](https://t.me/tskoyo) |
+| Sebi | [@Spyro7883](https://t.me/Spyro7883) |
+| eduv09 | [@eduv09](https://t.me/eduv09) |
+
+## Setting it up
+
+[SETUP.md](./SETUP.md) walks through a deployment from scratch: keys, contracts,
+pool, seeded traffic, subgraph, and the web app, in the order the dependencies
+require.
+
 ## Stack
 
 - Solidity + Foundry (hook, registry, oracle, router)
@@ -98,11 +198,64 @@ attestation lasting seconds, so the overlap is the deliberate trade.
   proof is checked server-side against World's cloud endpoint and the result
   attested by an EIP-712 signature.
 - Next.js (verify + swap UI, server-side RP signing and proof verification)
-- The Graph subgraph + agent dashboard — planned, not built
+- The Graph — subgraph deployed to Subgraph Studio ([endpoint](#subgraph))
+- Pool Guardian agent + its dashboard — not built yet
+
+## Tools and integrations used
+
+**World** — [`@worldcoin/idkit`](https://www.npmjs.com/package/@worldcoin/idkit)
+4.x and `@worldcoin/idkit-core` for the widget, `hashSignal` from
+`idkit-core/hashing`, and server-side RP signing via `idkit-core/signing`.
+Credential is the `selfieCheckLegacy` preset (`allow_legacy_proofs: true`),
+producing protocol version `3.0` proofs verified against
+`POST /api/v4/verify/{rp_id}` in the production environment. No on-chain World
+verifier is used — Selfie Check has none.
+
+**The Graph** — a Subgraph authored for this project, deployed to Subgraph
+Studio, indexing three contracts from block 11349795. Built with
+`@graphprotocol/graph-cli` 0.97 and `@graphprotocol/graph-ts` 0.38. It is the
+load-bearing data source for everything the dashboard shows that is not a
+single-swap quote: the verified/unverified split, per-wallet cadence, and
+attestation burn-down exist only in these logs. Endpoint and entity list under
+[Subgraph](#subgraph).
+
+**Uniswap** — v4 hooks against the canonical Sepolia `PoolManager`, with
+`v4-core` and `v4-periphery` (`HookMiner` for the CREATE2 salt,
+`IPositionManager` and Permit2 for the liquidity position).
+
+**Chain and app** — Solidity 0.8.26 with Foundry; Next.js 15 App Router with
+viem 2.x.
+
+### Agent skills
+
+Development used three packaged agent skills, vendored under
+[.claude/skills/](./.claude/skills) and [.agents/skills/](./.agents/skills):
+
+| Skill | Used for |
+|---|---|
+| `swap-integration` | Uniswap integration — pinned in [skills-lock.json](./skills-lock.json) from `uniswap/uniswap-ai` |
+| `world-id` | IDKit setup, proof verification, nullifier and session handling |
+| `subgraph-dev` | schema design, mapping handlers, manifest and deployment |
+
+We also ship one: [`proofpool-analytics`](./subgraph/skill) lets any agent query
+this Subgraph and reason about the pool — verified flow, fee premium, per-wallet
+cadence, attestation burn-down. It carries the field-level traps that otherwise
+produce confident wrong answers, and it is deliberate about what the data cannot
+support: bot-like *flow* is not a claim about a person, and a verified wallet is
+not a unique human.
+
+A note on `swap-integration`: installing it with
+`npx skills add uniswap/uniswap-ai --skill swap-integration` and selecting Claude
+Code created an `.agents/` directory rather than `.claude/`. See
+[FEEDBACK.md](./FEEDBACK.md).
 
 ## Sponsors we're targeting
 
-- **World** — Selfie Check Beta Test, $3,500
+- **World** — Selfie Check Beta, $1,750 (1st $1,000, 2nd $750). The other
+  $1,750 Selfie Check pot is the Continuity track and is out of reach for the
+  same reason as Uniswap's. Three qualification bullets: meaningful Selfie Check
+  use, a testing report covering **both** developer and user feedback, and a
+  working app or end-to-end prototype.
 - **Uniswap** — Best API Integration ($7,000) is the only reachable prize. We're on Classic track (confirmed, see below), and Continuity requires an actual pre-existing project to extend — we don't have one, so the $3k Stack Contribution prize is off the table regardless of what we build.
 - **The Graph** — Best AI Use Case of The Graph, $3,000. Requires an agent
   reasoning over live data, not just a subgraph. Best Use of Composable or
@@ -119,21 +272,29 @@ Must ship:
 - [x] Epoch-challenge binding so a saved World proof cannot mint a fresh allowance
 - [x] IDKit widget wired up
 - [x] Deployed on Sepolia, both pieces talking to each other
-- [x] Selfie Check testing documentation — [FEEDBACK_WORLD.md](./FEEDBACK_WORLD.md),
-      required for the World prize
+- [x] Selfie Check testing report, developer **and** user feedback —
+      [FEEDBACK_WORLD.md](./FEEDBACK_WORLD.md)
+- [x] Selfie Check tested end to end on Android and iOS, both successful
 
 The Graph track, in dependency order — each step invalidates the previous one if
 done out of sequence:
 - [x] Event surface: `poolId`, `digest`, and direction on `SwapPriced`
-- [ ] Redeploy (new hook address → new salt → new pool → re-point the web app)
-- [ ] Seed traffic: ~30-40 wallets, ~400-600 swaps, planted behavioural
-      archetypes, spread over time. Run with `maxSwaps` high, then
-      `setMaxSwaps(1)` before the demo — history keeps the variance, the live
-      demo stays legible
-- [ ] Subgraph indexing `SwapPriced` + `DiscountedSwapRecorded`
+- [x] Redeploy (new hook address → new salt → new pool → re-point the web app)
+- [x] Subgraph indexing `SwapPriced`, `SwapExecuted` and the Registry events,
+      with per-pool aggregates
+- [ ] Seed traffic: 24 wallets, ~400 swaps, planted behavioural archetypes,
+      spread over time. Run with `maxSwaps` high, then `setMaxSwaps(1)` before
+      the demo — history keeps the variance, the live demo stays legible
+- [ ] Confirm the subgraph indexes the seeded swaps. Empty `pools` with
+      confirmed on-chain traffic means the handler is not matching, and
+      everything downstream is blocked
 - [ ] Pool Guardian agent: answers fee-flow and cadence questions, refuses to
       overclaim on "how many bots" style questions
 - [ ] Dashboard: agent-written verdict on load, chat for follow-ups
+- [ ] Demo video. The Graph's tracks state "a 2-4 minute demo video" verbatim;
+      World's qualification bullets don't state a length, so cut a single video
+      at roughly 3 minutes and it satisfies both
+- [x] Tools, SDKs and skills used, and team contacts — see above
 
 If time left after that:
 - [ ] Scripted sandwich showing the attacker paying the unverified tier on both
