@@ -258,29 +258,21 @@ export default function VerifyPage() {
           allow_legacy_proofs={true}
           preset={selfieCheckLegacy({ signal: address })}
           handleVerify={async (result) => {
-            if (result.protocol_version !== "3.0") {
-              throw new Error(`unexpected protocol version: ${result.protocol_version}`);
-            }
-            const selfie = result.responses.find((r) => r.identifier === "selfie");
-            if (!selfie) throw new Error("no selfie credential in response");
-
+            // Forward the IDKit result untouched — it is already the exact body
+            // /api/v4/verify expects, and its fields are public inputs of the
+            // proof. `signal` travels alongside it so the server can check the
+            // proof's own signal_hash against the address being registered.
             const res = await fetch("/api/verify", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                signal: address,
-                idkitResponse: {
-                  proof: selfie.proof,
-                  merkle_root: selfie.merkle_root,
-                  nullifier_hash: selfie.nullifier,
-                  verification_level: selfie.identifier,
-                },
-              }),
+              body: JSON.stringify({ signal: address, result }),
             });
 
             if (!res.ok) {
               const body = await res.json().catch(() => ({}));
-              throw new Error(body.error ?? "verification failed");
+              const reason = body.error ?? "verification failed";
+              setError(reason);
+              throw new Error(reason);
             }
           }}
           onSuccess={() => {
@@ -288,7 +280,9 @@ export default function VerifyPage() {
             setStep(2);
             void refresh();
           }}
-          onError={(errorCode) => setError(`Verification failed: ${errorCode}`)}
+          // A rejection from /api/verify already set a specific reason; IDKit
+          // then reports a generic code, so don't let it overwrite the detail.
+          onError={(errorCode) => setError((prev) => prev ?? `Verification failed: ${errorCode}`)}
         />
       )}
     </div>
