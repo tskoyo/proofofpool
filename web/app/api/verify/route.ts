@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createWalletClient, http, isAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { sepolia } from "viem/chains";
+import { hashSignal } from "@worldcoin/idkit-core/hashing";
 import { registryAbi, REGISTRY_ADDRESS } from "@/lib/registry";
 
 // Selfie Check returns a World ID 3.0 Face proof — there is no on-chain groupId
@@ -37,6 +38,15 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "invalid request" }, { status: 400 });
     }
 
+    // `signal_hash` is a public input of the ZK proof — the client baked
+    // hashSignal(address) into it via `selfieCheckLegacy({ signal: address })`.
+    // We derive it here from the `signal` we're about to register rather than
+    // trusting a client-supplied hash: if the request body's `signal` is swapped
+    // for a different address, the derived hash stops matching the one inside
+    // the proof and World rejects the verification. Forwarding a client-provided
+    // signal_hash would leave that substitution undetected.
+    const signalHash = hashSignal(signal);
+
     const worldRes = await fetch(WORLD_VERIFY_URL(appId), {
         method: "POST",
         headers: {
@@ -48,6 +58,7 @@ export async function POST(req: Request) {
             proof: idkitResponse.proof,
             merkle_root: idkitResponse.merkle_root,
             verification_level: idkitResponse.verification_level,
+            signal_hash: signalHash,
             action,
         }),
     });
