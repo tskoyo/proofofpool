@@ -8,6 +8,8 @@ import { Badge, Banner, Button, Card, Icon, StepIndicator, WalletChip } from "@/
 import { NetworkNotice } from "@/components/wallet-ui";
 import { useWallet } from "@/lib/wallet";
 import { useVerificationStatus } from "@/lib/verification";
+import { useAttestation } from "@/lib/attestation";
+import { deserializeAttestation } from "@/lib/attestation-types";
 
 const APP_ID = process.env.NEXT_PUBLIC_WLD_APP_ID as `app_${string}`;
 const ACTION = process.env.NEXT_PUBLIC_WLD_ACTION as string;
@@ -24,6 +26,7 @@ export default function VerifyPage() {
   const { address, status, error: walletError, connect, disconnect, switchToTargetChain, isConnected, isWrongChain } =
     useWallet();
   const { state: verificationState, isVerified, refresh } = useVerificationStatus(address);
+  const { setAttestation } = useAttestation();
 
   async function fetchRpContext(): Promise<RpContext> {
     const res = await fetch("/api/rp-signature", {
@@ -221,8 +224,8 @@ export default function VerifyPage() {
                 <Icon name="scan-face" size={36} style={{ color: "var(--text-primary)", margin: "0 auto 20px" }} />
                 <div style={{ fontWeight: 600, fontSize: 20, marginBottom: 8 }}>Proof accepted</div>
                 <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 20 }}>
-                  Your Selfie Check passed and the registration transaction has been submitted. The fee tier
-                  changes once it&rsquo;s mined &mdash; that usually takes a few seconds.
+                  Your Selfie Check passed and your wallet now holds a signed attestation. Nothing was written
+                  on-chain &mdash; the discount applies when you present it on a swap.
                 </p>
                 <Button
                   variant="accent"
@@ -274,6 +277,21 @@ export default function VerifyPage() {
               setError(reason);
               throw new Error(reason);
             }
+
+            // The proof is exchanged for a signed attestation the wallet carries
+            // to the pool. Nothing was written on-chain here — the discount only
+            // materialises when this is presented on a swap.
+            const body = await res.json();
+            if (!body.attested) {
+              const reason = body.reason ?? "server did not issue an attestation";
+              setError(reason);
+              throw new Error(reason);
+            }
+
+            setAttestation({
+              attestation: deserializeAttestation(body.attestation),
+              signature: body.signature,
+            });
           }}
           onSuccess={() => {
             setError(null);

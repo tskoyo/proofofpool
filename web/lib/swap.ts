@@ -5,6 +5,7 @@ import { createPublicClient, createWalletClient, custom, http, maxUint256, type 
 import { TARGET_CHAIN } from "./wallet";
 import { TOKENS, type Token } from "./tokens";
 import { erc20Abi } from "./erc20";
+import type { LivenessAttestation, SignedAttestation } from "./attestation-types";
 
 export const ROUTER_ADDRESS = process.env.NEXT_PUBLIC_ROUTER_ADDRESS as Address | undefined;
 const HOOK_ADDRESS = process.env.NEXT_PUBLIC_HOOK_ADDRESS as Address | undefined;
@@ -47,10 +48,27 @@ export const routerAbi = [
           { name: "deadline", type: "uint256" },
         ],
       },
+      {
+        name: "attestation",
+        type: "tuple",
+        components: [
+          { name: "subject", type: "address" },
+          { name: "validUntil", type: "uint256" },
+          { name: "nonce", type: "uint256" },
+        ],
+      },
+      { name: "signature", type: "bytes" },
     ],
     outputs: [{ name: "amountOut", type: "uint256" }],
   },
 ] as const;
+
+/** Sent when the swapper holds no attestation; the router then omits it entirely. */
+const NO_ATTESTATION: LivenessAttestation = {
+  subject: "0x0000000000000000000000000000000000000000",
+  validUntil: 0n,
+  nonce: 0n,
+};
 
 /** v4 requires currency0 < currency1, compared as raw addresses. */
 const [CURRENCY0, CURRENCY1] = TOKENS.map((t) => t.address).sort((a, b) =>
@@ -88,6 +106,11 @@ export interface SwapArgs {
   amountOutMinimum: bigint;
   /** Minutes from now. */
   deadlineMinutes: number;
+  /**
+   * Held attestation, or null to swap at the full fee. An invalid or expired one
+   * costs the discount but never reverts the swap.
+   */
+  attestation: SignedAttestation | null;
 }
 
 /**
@@ -106,7 +129,9 @@ export function useSwap() {
     setTxHash(null);
   }, []);
 
-  const swap = useCallback(async ({ account, tokenIn, amountIn, amountOutMinimum, deadlineMinutes }: SwapArgs) => {
+  const swap = useCallback(async (
+    { account, tokenIn, amountIn, amountOutMinimum, deadlineMinutes, attestation }: SwapArgs,
+  ) => {
     setError(null);
     setTxHash(null);
 
@@ -157,6 +182,10 @@ export function useSwap() {
             sqrtPriceLimitX96: zeroForOne ? MIN_SQRT_PRICE_LIMIT : MAX_SQRT_PRICE_LIMIT,
             deadline: BigInt(Math.floor(Date.now() / 1000) + deadlineMinutes * 60),
           },
+          attestation?.attestation ?? NO_ATTESTATION,
+          // An empty signature is the router's signal to send the identity alone,
+          // which keeps an unverified swap off the attestation calldata path.
+          attestation?.signature ?? "0x",
         ],
       });
 

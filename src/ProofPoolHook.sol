@@ -7,30 +7,34 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
-import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 
+import {LivenessAttestation} from "./LivenessOracle.sol";
 import {Registry} from "./Registry.sol";
 
 /// @title ProofPoolHook
 /// @notice A Uniswap v4 hook that charges verified-human swappers a low fee and
-///         unverified addresses a higher fee. The premium collected from
-///         unverified flow accrues to LPs through v4's standard fee accounting.
+///         everyone else a higher one. The premium collected from unverified flow
+///         accrues to LPs through v4's standard fee accounting.
 /// @dev This is the entire mechanism. It does not detect bots or sandwich
-///      patterns — it prices one boolean. See DESIGN.md for what this does
-///      and does not claim to solve.
+///      patterns — it prices one boolean.
 contract ProofPoolHook is BaseHook {
     using LPFeeLibrary for uint24;
 
     error InvalidTrustedRouter();
+    error InvalidRegistry();
 
-    /// @notice Fee applied to swaps from verified-human addresses, in v4 fee units (100 = 0.01%).
+    /// @notice Fee applied to verified-human swappers, in v4 fee units (100 = 0.01%).
     uint24 public constant VERIFIED_FEE = 500; // 0.05%
 
-    /// @notice Fee applied to swaps from unverified addresses.
+    /// @notice Fee applied to everyone else.
     uint24 public constant UNVERIFIED_FEE = 3000; // 0.30%
 
-    /// @notice The registry this hook checks to determine verification status.
+    /// @dev Hook data carrying only an address and no attestation. Anything of this
+    ///      length is treated as an unverified swap rather than decoded further.
+    uint256 private constant ADDRESS_ONLY_HOOK_DATA_LENGTH = 32;
+
+    /// @notice Tracks attestation validity and how many discounted swaps remain.
     Registry public immutable REGISTRY;
 
     /// @notice The only router allowed to identify the wallet behind a swap.
@@ -40,13 +44,15 @@ contract ProofPoolHook is BaseHook {
 
     constructor(IPoolManager _poolManager, Registry _registry, address _trustedRouter) BaseHook(_poolManager) {
         if (_trustedRouter == address(0)) revert InvalidTrustedRouter();
+        if (address(_registry) == address(0)) revert InvalidRegistry();
         REGISTRY = _registry;
         TRUSTED_ROUTER = _trustedRouter;
     }
 
-    /// @dev Declares which v4 callbacks this hook implements. Only beforeSwap
-    ///      (to override the fee) and afterSwap (to emit pricing data for the
-    ///      subgraph) are active — everything else is a no-op.
+    /// @dev Only beforeSwap is active. Pricing, recording and the SwapPriced event
+    ///      all happen there: afterSwap would have to verify the attestation a
+    ///      second time to know what it priced, and the event's `amountSpecified`
+    ///      is identical in both callbacks, so nothing is gained by waiting.
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
             beforeInitialize: false,
@@ -56,7 +62,7 @@ contract ProofPoolHook is BaseHook {
             beforeRemoveLiquidity: false,
             afterRemoveLiquidity: false,
             beforeSwap: true,
-            afterSwap: true,
+            afterSwap: false,
             beforeDonate: false,
             afterDonate: false,
             beforeSwapReturnDelta: false,
@@ -66,49 +72,52 @@ contract ProofPoolHook is BaseHook {
         });
     }
 
-    /// @dev Overrides the swap fee based on the swapper's verification status.
-    ///      The pool MUST be initialized with LPFeeLibrary.DYNAMIC_FEE_FLAG set
-    ///      in PoolKey.fee, or this override is silently ignored by PoolManager.
-    function _beforeSwap(address sender, PoolKey calldata, SwapParams calldata, bytes calldata hookData)
+    /// @dev Prices the swap and consumes one of the attestation's discounted swaps.
+    ///      Not `view` — recording the usage is a state write, which is the whole
+    ///      point of the swap cap.
+    ///
+    ///      The pool MUST be initialized with LPFeeLibrary.DYNAMIC_FEE_FLAG set in
+    ///      PoolKey.fee, or this override is silently ignored by PoolManager.
+    function _beforeSwap(address sender, PoolKey calldata, SwapParams calldata params, bytes calldata hookData)
         internal
-        view
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        (, bool verified) = _verificationStatus(sender, hookData);
+        (address swapper, bool verified, bytes32 digest) = _priceSwap(sender, hookData);
+
+        if (verified) {
+            REGISTRY.recordSwap(digest);
+        }
+
         uint24 fee = verified ? VERIFIED_FEE : UNVERIFIED_FEE;
+        emit SwapPriced(swapper, verified, fee, params.amountSpecified);
 
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, fee | LPFeeLibrary.OVERRIDE_FEE_FLAG);
     }
 
-    /// @dev Emits the pricing decision and the swap's requested amount.
-    function _afterSwap(
-        address sender,
-        PoolKey calldata,
-        SwapParams calldata params,
-        BalanceDelta,
-        bytes calldata hookData
-    ) internal override returns (bytes4, int128) {
-        (address swapper, bool verified) = _verificationStatus(sender, hookData);
-        uint24 fee = verified ? VERIFIED_FEE : UNVERIFIED_FEE;
-
-        emit SwapPriced(swapper, verified, fee, params.amountSpecified);
-
-        return (BaseHook.afterSwap.selector, 0);
-    }
-
-    /// @dev Hook data is an identity claim, so it is ignored unless it came
+    /// @dev Hook data is an identity claim, so it is ignored unless it arrived
     ///      through the router that binds the claim to its caller and payer.
-    function _verificationStatus(address sender, bytes calldata hookData)
+    ///      An absent or invalid attestation prices at the full fee; it never
+    ///      reverts, so an unverified swap still goes through.
+    function _priceSwap(address sender, bytes calldata hookData)
         internal
         view
-        returns (address swapper, bool verified)
+        returns (address swapper, bool verified, bytes32 digest)
     {
-        if (sender != TRUSTED_ROUTER || hookData.length != 32) {
-            return (sender, false);
+        if (sender != TRUSTED_ROUTER || hookData.length < ADDRESS_ONLY_HOOK_DATA_LENGTH) {
+            return (sender, false, bytes32(0));
         }
 
-        swapper = abi.decode(hookData, (address));
-        verified = swapper != address(0) && REGISTRY.isVerifiedHuman(swapper);
+        if (hookData.length == ADDRESS_ONLY_HOOK_DATA_LENGTH) {
+            return (abi.decode(hookData, (address)), false, bytes32(0));
+        }
+
+        LivenessAttestation memory attestation;
+        bytes memory signature;
+        (swapper, attestation, signature) = abi.decode(hookData, (address, LivenessAttestation, bytes));
+
+        if (swapper == address(0)) return (sender, false, bytes32(0));
+
+        (verified, digest) = REGISTRY.discountFor(attestation, signature, swapper);
     }
 }

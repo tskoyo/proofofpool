@@ -24,32 +24,40 @@ command -v cast  >/dev/null || fail "cast not found — install Foundry"
 [ -f .env ] || fail "no .env in the repo root — copy .env.example and fill it in"
 set -a; source .env; set +a
 
-for var in PRIVATE_KEY SEPOLIA_RPC_URL REGISTRY_ATTESTER WORLD_ID_APP_ID WORLD_ID_ACTION_ID TOKEN_USDC TOKEN_WBTC; do
+for var in PRIVATE_KEY SEPOLIA_RPC_URL TRUSTED_SIGNER CONTRACTS_OWNER MAX_SWAPS TOKEN_USDC TOKEN_WBTC; do
   [ -n "${!var:-}" ] || fail "$var is not set in .env"
 done
 
 # --- Pre-flight -------------------------------------------------------------
 
-# Registry.setAttester is itself onlyAttester, so deploying with an attester
-# address nobody holds the key for permanently bricks registration. Catch the
-# mismatch here rather than after broadcasting.
+# TRUSTED_SIGNER must be the address of the key the backend signs attestations
+# with, or every attestation fails signature recovery and nobody is ever
+# discounted. Recoverable via setTrustedSigner, but only by the owner.
 if [ -f web/.env ]; then
   attester_key=$(grep -E '^ATTESTER_PRIVATE_KEY=.' web/.env | head -1 | cut -d= -f2- || true)
   if [ -n "${attester_key:-}" ]; then
     derived=$(cast wallet address --private-key "$attester_key")
-    if [ "${derived,,}" != "${REGISTRY_ATTESTER,,}" ]; then
-      fail "REGISTRY_ATTESTER ($REGISTRY_ATTESTER) is not the address of web/.env's
-       ATTESTER_PRIVATE_KEY ($derived). Registration would revert NotAttester,
-       and setAttester could never fix it."
+    if [ "${derived,,}" != "${TRUSTED_SIGNER,,}" ]; then
+      fail "TRUSTED_SIGNER ($TRUSTED_SIGNER) is not the address of web/.env's
+       ATTESTER_PRIVATE_KEY ($derived). Every attestation would fail signature
+       recovery and no swap would ever be discounted."
     fi
-    echo "  attester matches web/.env ($derived)"
+    echo "  trusted signer matches web/.env ($derived)"
   else
-    echo "  note: web/.env has no ATTESTER_PRIVATE_KEY yet — cannot cross-check REGISTRY_ATTESTER"
+    echo "  note: web/.env has no ATTESTER_PRIVATE_KEY yet — cannot cross-check TRUSTED_SIGNER"
   fi
 fi
 
 deployer=$(cast wallet address --private-key "$PRIVATE_KEY")
 echo "  deployer: $deployer"
+
+# The script calls registry.setHook() inline only when the owner is the
+# deployer; otherwise it prints a manual step that is easy to miss.
+if [ "${CONTRACTS_OWNER,,}" != "${deployer,,}" ]; then
+  echo "  NOTE: CONTRACTS_OWNER ($CONTRACTS_OWNER) is not the deployer."
+  echo "        You must call registry.setHook(<hook>) as the owner after this run,"
+  echo "        or no swap can ever take the discount."
+fi
 
 balance=$(cast balance "$deployer" --rpc-url "$SEPOLIA_RPC_URL")
 [ "$balance" != "0" ] || fail "deployer has no Sepolia ETH"
@@ -90,12 +98,16 @@ cat <<'NEXT'
 
 Deployed. Copy the addresses logged above into web/.env:
 
-  REGISTRY_ADDRESS=<Registry>
-  NEXT_PUBLIC_REGISTRY_ADDRESS=<Registry>     # same value
+  NEXT_PUBLIC_ORACLE_ADDRESS=<LivenessOracle>
+  NEXT_PUBLIC_REGISTRY_ADDRESS=<Registry>
   NEXT_PUBLIC_HOOK_ADDRESS=<ProofPoolHook>
-  RPC_URL=<your Sepolia RPC>
+  NEXT_PUBLIC_ROUTER_ADDRESS=<ProofPoolRouter>
   NEXT_PUBLIC_RPC_URL=<your Sepolia RPC>
 
-Then fund the attester address with Sepolia ETH — it pays gas for every
-registerVerifiedHuman call, and registrations fail silently without it.
+The oracle address is part of the EIP-712 domain, so getting it wrong produces
+signatures the contract rejects. The attester key only signs and never sends a
+transaction, so it does NOT need to be funded.
+
+The pool is new: update the PoolKey hook address in web/lib/swap.ts to match
+NEXT_PUBLIC_HOOK_ADDRESS, or swaps will address a pool that was never created.
 NEXT

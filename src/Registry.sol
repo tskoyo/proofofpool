@@ -1,80 +1,117 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.26;
+
+import {LivenessAttestation, LivenessOracle} from "./LivenessOracle.sol";
 
 /// @title Registry
-/// @notice Records which wallets belong to a unique human, per a World Selfie Check
-///         verification, and exposes a simple boolean check that ProofPoolHook reads
-///         on every swap.
-/// @dev Selfie Check proofs (World ID 3.0 Face proofs) are verified off-chain by our
-///      backend against World's `/api/v2/verify/{app_id}` endpoint — there is no
-///      on-chain `groupId` for Face proofs, only for Orb (groupId = 1). The backend's
-///      `attester` key is the thing this contract trusts; it attests "this nullifier
-///      passed off-chain verification" instead of the contract checking a ZK proof
-///      itself. One human = one nullifier = one registered address, forever. There is
-///      no way to re-verify or revoke; see DESIGN.md for why this is a known
-///      limitation, not an oversight.
+/// @notice Decides whether a swapper is entitled to the discounted fee, and counts
+///         how many discounted swaps each attestation has been used for.
+/// @dev Split of responsibility: LivenessOracle answers "is this signature ours and
+///      still fresh", Registry answers "has this attestation been used up". A
+///      discount requires BOTH — the attestation must be unexpired AND under the
+///      swap cap, so whichever limit is reached first ends it.
+///
+///      Nothing here records World nullifiers, so one human can hold attestations
+///      for any number of addresses. That is a known, accepted gap; see README.md.
 contract Registry {
-    error DuplicateNullifier(uint256 nullifierHash);
-    error NotAttester();
+    error NotOwner();
+    error NotHook();
+    error ZeroAddress();
 
-    event HumanVerified(address indexed account, uint256 indexed nullifierHash);
-    event AttesterUpdated(address indexed oldAttester, address indexed newAttester);
+    event HookUpdated(address indexed oldHook, address indexed newHook);
+    event MaxSwapsUpdated(uint256 oldMaxSwaps, uint256 newMaxSwaps);
+    event OwnerUpdated(address indexed oldOwner, address indexed newOwner);
+    event DiscountedSwapRecorded(bytes32 indexed digest, uint256 newCount);
 
-    /// @dev The backend key allowed to attest that a Selfie Check proof verified
-    ///      successfully off-chain. Compromise of this key lets an attacker register
-    ///      arbitrary addresses as verified — keep it server-only, rotate if leaked.
-    address public attester;
+    /// @notice Verifies attestation signatures and expiry.
+    LivenessOracle public immutable ORACLE;
 
-    /// @dev The World ID app ID, obtained from the World Developer Portal. Kept for
-    ///      reference/off-chain tooling; not used in any on-chain check.
-    string public appId;
+    /// @notice Discounted swaps already taken, keyed by EIP-712 digest.
+    /// @dev The digest commits to `subject`, so a count is inherently per-address.
+    ///      A fresh attestation (new nonce) is a new digest and so a new allowance.
+    mapping(bytes32 => uint256) public usageCount;
 
-    /// @dev The World ID action ID configured for this app. Same caveat as `appId`.
-    string public actionId;
+    /// @notice Discounted swaps allowed per attestation. Zero means uncapped.
+    uint256 public maxSwaps;
 
-    /// @dev Tracks which World ID nullifiers have already been used, so the same
-    ///      human can't verify twice under a different address.
-    mapping(uint256 => bool) public nullifierHashes;
+    /// @notice The only address allowed to record swaps.
+    /// @dev Set after deployment: the hook's CREATE2 address depends on this
+    ///      contract's address, so the Registry has to exist first.
+    address public hook;
 
-    /// @dev Tracks which addresses have completed verification. This is the
-    ///      value the hook actually reads.
-    mapping(address => bool) public isVerifiedHuman;
+    /// @notice May set the hook and change the swap cap.
+    address public owner;
 
-    modifier onlyAttester() {
-        if (msg.sender != attester) revert NotAttester();
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
         _;
     }
 
-    /// @param _attester Backend address allowed to attest verified Selfie Check proofs.
-    /// @param _appId Your World ID app ID from the Developer Portal.
-    /// @param _actionId The action ID configured for this app (e.g. "verify-human").
-    constructor(address _attester, string memory _appId, string memory _actionId) {
-        attester = _attester;
-        appId = _appId;
-        actionId = _actionId;
+    modifier onlyHook() {
+        if (msg.sender != hook) revert NotHook();
+        _;
     }
 
-    /// @notice Register `signal` as a verified human, after the backend has verified
-    ///         their Selfie Check proof off-chain via World's verify endpoint.
-    /// @dev `signal` should be the address that will be swapping — this binds
-    ///      the verification to a specific address so it can't be replayed elsewhere.
-    /// @param signal The address being verified (typically the user's wallet).
-    /// @param nullifierHash The nullifier hash from the verified World ID proof,
-    ///        preventing double-registration by the same human.
-    function registerVerifiedHuman(address signal, uint256 nullifierHash) external onlyAttester {
-        if (nullifierHashes[nullifierHash]) {
-            revert DuplicateNullifier(nullifierHash);
-        }
-
-        nullifierHashes[nullifierHash] = true;
-        isVerifiedHuman[signal] = true;
-
-        emit HumanVerified(signal, nullifierHash);
+    constructor(LivenessOracle _oracle, uint256 _maxSwaps, address _owner) {
+        if (address(_oracle) == address(0) || _owner == address(0)) revert ZeroAddress();
+        ORACLE = _oracle;
+        maxSwaps = _maxSwaps;
+        owner = _owner;
     }
 
-    /// @notice Rotate the attester key, e.g. if the backend's signing key is replaced.
-    function setAttester(address newAttester) external onlyAttester {
-        emit AttesterUpdated(attester, newAttester);
-        attester = newAttester;
+    /// @notice Whether `swapper` may take the discounted fee with this attestation.
+    /// @dev Never reverts — an invalid attestation means "pay full fee", not
+    ///      "revert the swap". The `subject == swapper` check is what stops a caller
+    ///      presenting somebody else's valid attestation as their own.
+    /// @return discounted True if the attestation is valid, belongs to `swapper`,
+    ///         and still has swaps left.
+    /// @return digest The attestation's digest, to pass back to `recordSwap`.
+    function discountFor(LivenessAttestation calldata attestation, bytes calldata signature, address swapper)
+        external
+        view
+        returns (bool discounted, bytes32 digest)
+    {
+        if (attestation.subject != swapper) return (false, bytes32(0));
+
+        bool valid;
+        (valid, digest) = ORACLE.verify(attestation, signature);
+        if (!valid) return (false, digest);
+
+        discounted = maxSwaps == 0 || usageCount[digest] < maxSwaps;
+    }
+
+    /// @notice Record that an attestation was used for a discounted swap.
+    /// @dev Called from the hook's beforeSwap. If the swap later reverts, this
+    ///      write reverts with it, so the count only ever reflects swaps that
+    ///      actually settled.
+    function recordSwap(bytes32 digest) external onlyHook {
+        uint256 newCount = usageCount[digest] + 1;
+        usageCount[digest] = newCount;
+        emit DiscountedSwapRecorded(digest, newCount);
+    }
+
+    /// @notice Discounted swaps still available on an attestation.
+    /// @dev Returns `type(uint256).max` when uncapped.
+    function swapsRemaining(bytes32 digest) external view returns (uint256) {
+        if (maxSwaps == 0) return type(uint256).max;
+        uint256 used = usageCount[digest];
+        return used >= maxSwaps ? 0 : maxSwaps - used;
+    }
+
+    function setHook(address newHook) external onlyOwner {
+        if (newHook == address(0)) revert ZeroAddress();
+        emit HookUpdated(hook, newHook);
+        hook = newHook;
+    }
+
+    function setMaxSwaps(uint256 newMaxSwaps) external onlyOwner {
+        emit MaxSwapsUpdated(maxSwaps, newMaxSwaps);
+        maxSwaps = newMaxSwaps;
+    }
+
+    function setOwner(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ZeroAddress();
+        emit OwnerUpdated(owner, newOwner);
+        owner = newOwner;
     }
 }

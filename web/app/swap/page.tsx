@@ -22,6 +22,7 @@ import { TOKEN_OPTIONS, counterpart, formatAmount, tokenBySymbol, type Token } f
 import { formatUnits, parseUnits, useBalances } from "@/lib/erc20";
 import { ROUTER_ADDRESS, useSwap } from "@/lib/swap";
 import { applySlippage, applyVerifiedDiscount, useQuote } from "@/lib/quote";
+import { useAttestationFor } from "@/lib/attestation";
 
 /** Shows a token's on-chain balance, with an optional click-to-fill. */
 function BalanceRow({
@@ -74,6 +75,9 @@ function BalanceRow({
   );
 }
 
+/** Registry.swapsRemaining returns uint256 max when the cap is disabled. */
+const UNCAPPED = 2n ** 256n - 1n;
+
 const SLIPPAGE_TABS = [
   { label: "0.1%", value: "0.1" },
   { label: "0.5%", value: "0.5" },
@@ -93,7 +97,9 @@ export default function SwapPage() {
   const [deadline, setDeadline] = useState("30");
 
   const { address, status, connect, disconnect, switchToTargetChain, isConnected, isWrongChain } = useWallet();
-  const { state: verificationState, isVerified } = useVerificationStatus(address);
+  const { state: verificationState, isVerified, swapsRemaining, validUntil, refresh: refreshStatus } =
+    useVerificationStatus(address);
+  const heldAttestation = useAttestationFor(address);
   const { verifiedFee, unverifiedFee, verifiedLabel, unverifiedLabel, source: feeSource } = useFeeTiers();
   const { balances, refresh: refreshBalances } = useBalances(address);
   const { swap, stage, error: swapError, txHash, reset: resetSwap, isBusy } = useSwap();
@@ -163,10 +169,14 @@ export default function SwapPage() {
       amountIn: amountRaw,
       amountOutMinimum,
       deadlineMinutes: deadlineNum,
+      attestation: heldAttestation,
     });
     if (hash) {
       setConfirmOpen(false);
       void refreshBalances();
+      // A discounted swap consumed one of the attestation's uses, so the
+      // remaining count on screen is now stale.
+      void refreshStatus();
     }
   }
 
@@ -388,14 +398,25 @@ export default function SwapPage() {
 
           {isConnected && isVerified && (
             <Banner tone="success" title="Verified wallet" style={{ marginTop: 16 }}>
-              This wallet is registered on-chain, so the pool charges it the {verifiedLabel} human rate.
+              Paying the {verifiedLabel} human rate.{" "}
+              {swapsRemaining !== null && swapsRemaining < UNCAPPED
+                ? `${swapsRemaining.toString()} discounted ${swapsRemaining === 1n ? "swap" : "swaps"} left`
+                : "Unlimited swaps"}
+              {validUntil !== null && `, until ${new Date(Number(validUntil) * 1000).toLocaleTimeString()}`}.
             </Banner>
           )}
 
-          {isConnected && !isVerified && verificationState !== "unconfigured" && (
+          {isConnected && verificationState === "exhausted" && (
+            <Banner tone="warning" title="Discount used up" style={{ marginTop: 16 }}>
+              Your attestation is still in date but its swap allowance is spent, so this swap pays the{" "}
+              {unverifiedLabel} tier. Verify again for a fresh allowance.
+            </Banner>
+          )}
+
+          {isConnected && verificationState === "unverified" && (
             <Banner tone="warning" title="Unverified wallet" style={{ marginTop: 16 }}>
               You&rsquo;re paying the {unverifiedLabel} standard tier. Verify with World ID to unlock the human
-              rate on every future swap.
+              rate &mdash; no transaction needed, the proof is carried with your swap.
             </Banner>
           )}
 
