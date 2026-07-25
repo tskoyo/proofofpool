@@ -1,0 +1,296 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { IDKitRequestWidget, selfieCheckLegacy } from "@worldcoin/idkit";
+import type { RpContext } from "@worldcoin/idkit-core";
+import { Badge, Banner, Button, Card, Icon, StepIndicator, WalletChip } from "@/components/ds";
+import { NetworkNotice } from "@/components/wallet-ui";
+import { useWallet } from "@/lib/wallet";
+import { useVerificationStatus } from "@/lib/verification";
+
+const APP_ID = process.env.NEXT_PUBLIC_WLD_APP_ID as `app_${string}`;
+const ACTION = process.env.NEXT_PUBLIC_WLD_ACTION as string;
+const RP_ID = process.env.NEXT_PUBLIC_WLD_RP_ID as `rp_${string}`;
+
+const STEPS = ["Connect", "Scan", "Confirm"];
+
+export default function VerifyPage() {
+  const [step, setStep] = useState(0);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [rpContext, setRpContext] = useState<RpContext | null>(null);
+
+  const { address, status, error: walletError, connect, disconnect, switchToTargetChain, isConnected, isWrongChain } =
+    useWallet();
+  const { state: verificationState, isVerified, refresh } = useVerificationStatus(address);
+
+  async function fetchRpContext(): Promise<RpContext> {
+    const res = await fetch("/api/rp-signature", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: ACTION }),
+    }).then((r) => r.json());
+
+    return {
+      rp_id: RP_ID,
+      nonce: res.nonce,
+      created_at: res.created_at,
+      expires_at: res.expires_at,
+      signature: res.sig,
+    };
+  }
+
+  async function openWorldApp() {
+    setError(null);
+    try {
+      setRpContext(await fetchRpContext());
+      setOpen(true);
+    } catch {
+      setError("Could not reach the signing endpoint. Check the server configuration.");
+    }
+  }
+
+  function changeWallet() {
+    disconnect();
+    setStep(0);
+    setError(null);
+  }
+
+  return (
+    <div
+      style={{
+        maxWidth: 440,
+        margin: "56px auto",
+        padding: "0 16px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 24,
+        alignItems: "center",
+      }}
+    >
+      <div style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <Link
+          href="/"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            color: "var(--text-tertiary)",
+            textDecoration: "none",
+            fontSize: "var(--text-body-s)",
+            fontWeight: 500,
+          }}
+        >
+          <Icon name="arrow-left" size={15} />
+          Back
+        </Link>
+        <Link href="/">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo-lockup.svg" alt="ProofPool" style={{ height: 26, display: "block" }} />
+        </Link>
+        <span style={{ width: 52 }} />
+      </div>
+
+      <StepIndicator steps={STEPS} current={step} />
+
+      <Card style={{ width: "100%", textAlign: "center", padding: "40px 28px" }}>
+        {step === 0 && (
+          <>
+            <Icon name="wallet" size={36} style={{ color: "var(--text-primary)", margin: "0 auto 20px" }} />
+            <div style={{ fontWeight: 600, fontSize: 20, marginBottom: 8 }}>Connect your wallet</div>
+            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 24 }}>
+              ProofPool registers your verification on-chain, tied to the wallet you connect here.
+            </p>
+
+            {!isConnected && (
+              <>
+                {status === "unavailable" ? (
+                  <>
+                    <Banner tone="warning" title="No wallet detected" style={{ textAlign: "left" }}>
+                      This browser has no injected wallet. Install one, then reload this page.
+                    </Banner>
+                    <a
+                      href="https://metamask.io/download/"
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      style={{ textDecoration: "none", display: "block", marginTop: 20 }}
+                    >
+                      <Button variant="accent" style={{ width: "100%" }}>
+                        Install a wallet
+                      </Button>
+                    </a>
+                  </>
+                ) : (
+                  <Button
+                    variant="accent"
+                    style={{ width: "100%" }}
+                    disabled={status === "connecting" || status === "loading"}
+                    onClick={connect}
+                  >
+                    {status === "connecting" ? "Check your wallet…" : "Connect wallet"}
+                  </Button>
+                )}
+                {walletError && (
+                  <p style={{ color: "var(--status-error)", fontSize: 13, margin: "16px 0 0" }}>{walletError}</p>
+                )}
+              </>
+            )}
+
+            {isConnected && address && (
+              <>
+                <WalletChip address={address} verified={isVerified} style={{ margin: "0 auto 20px" }} />
+
+                <NetworkNotice
+                  isWrongChain={isWrongChain}
+                  onSwitch={switchToTargetChain}
+                  style={{ textAlign: "left", marginBottom: 20 }}
+                />
+
+                {isVerified ? (
+                  <>
+                    <Banner tone="success" title="Already verified" style={{ textAlign: "left" }}>
+                      This wallet is registered on-chain and already pays the 0.05% fee.
+                    </Banner>
+                    <Link href="/swap" style={{ textDecoration: "none", display: "block", marginTop: 20 }}>
+                      <Button variant="accent" style={{ width: "100%" }}>
+                        Start swapping
+                      </Button>
+                    </Link>
+                  </>
+                ) : (
+                  <Button
+                    variant="accent"
+                    style={{ width: "100%" }}
+                    disabled={isWrongChain}
+                    onClick={() => setStep(1)}
+                  >
+                    Continue
+                  </Button>
+                )}
+
+                <Button variant="ghost" size="s" style={{ marginTop: 12 }} onClick={changeWallet}>
+                  Use a different wallet
+                </Button>
+              </>
+            )}
+          </>
+        )}
+
+        {step === 1 && address && (
+          <>
+            <Icon name="scan-face" size={36} style={{ color: "var(--text-primary)", margin: "0 auto 20px" }} />
+            <div style={{ fontWeight: 600, fontSize: 20, marginBottom: 8 }}>Verify with World ID</div>
+            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 20 }}>
+              Complete a Selfie Check in the World App. This proves you&rsquo;re a unique human &mdash; it never
+              links your identity to your wallet.
+            </p>
+            <WalletChip address={address} style={{ margin: "0 auto 24px" }} />
+            <Button variant="accent" style={{ width: "100%" }} onClick={openWorldApp}>
+              Open World App
+            </Button>
+            {error && <p style={{ color: "var(--status-error)", fontSize: 13, margin: "16px 0 0" }}>{error}</p>}
+            <Button variant="ghost" size="s" style={{ marginTop: 12 }} onClick={() => setStep(0)}>
+              Back
+            </Button>
+          </>
+        )}
+
+        {step === 2 && (
+          <>
+            {isVerified ? (
+              <>
+                <Icon
+                  name="check-circle-2"
+                  size={40}
+                  style={{ color: "var(--accent-primary)", margin: "0 auto 20px" }}
+                />
+                <div style={{ fontWeight: 600, fontSize: 20, marginBottom: 8 }}>You&rsquo;re verified</div>
+                <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 20 }}>
+                  Your wallet is registered as human-verified on-chain.
+                </p>
+                <Badge tone="success">0.05% fee unlocked</Badge>
+                <Link href="/swap" style={{ textDecoration: "none", display: "block", marginTop: 24 }}>
+                  <Button variant="accent" style={{ width: "100%" }}>
+                    Start swapping
+                  </Button>
+                </Link>
+              </>
+            ) : (
+              <>
+                <Icon name="scan-face" size={36} style={{ color: "var(--text-primary)", margin: "0 auto 20px" }} />
+                <div style={{ fontWeight: 600, fontSize: 20, marginBottom: 8 }}>Proof accepted</div>
+                <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 20 }}>
+                  Your Selfie Check passed and the registration transaction has been submitted. The fee tier
+                  changes once it&rsquo;s mined &mdash; that usually takes a few seconds.
+                </p>
+                <Button
+                  variant="accent"
+                  style={{ width: "100%" }}
+                  disabled={verificationState === "checking"}
+                  onClick={() => void refresh()}
+                >
+                  {verificationState === "checking" ? "Checking…" : "Check on-chain status"}
+                </Button>
+                {verificationState === "unconfigured" && (
+                  <p style={{ color: "var(--text-tertiary)", fontSize: 13, margin: "16px 0 0" }}>
+                    NEXT_PUBLIC_REGISTRY_ADDRESS isn&rsquo;t set, so status can&rsquo;t be read from the contract.
+                  </p>
+                )}
+                {verificationState === "error" && (
+                  <p style={{ color: "var(--status-error)", fontSize: 13, margin: "16px 0 0" }}>
+                    Could not reach the registry contract. Check NEXT_PUBLIC_RPC_URL.
+                  </p>
+                )}
+              </>
+            )}
+          </>
+        )}
+      </Card>
+
+      {rpContext && address && (
+        <IDKitRequestWidget
+          open={open}
+          onOpenChange={setOpen}
+          app_id={APP_ID}
+          action={ACTION}
+          rp_context={rpContext}
+          allow_legacy_proofs={true}
+          preset={selfieCheckLegacy({ signal: address })}
+          handleVerify={async (result) => {
+            if (result.protocol_version !== "3.0") {
+              throw new Error(`unexpected protocol version: ${result.protocol_version}`);
+            }
+            const selfie = result.responses.find((r) => r.identifier === "selfie");
+            if (!selfie) throw new Error("no selfie credential in response");
+
+            const res = await fetch("/api/verify", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                signal: address,
+                idkitResponse: {
+                  proof: selfie.proof,
+                  merkle_root: selfie.merkle_root,
+                  nullifier_hash: selfie.nullifier,
+                  verification_level: selfie.identifier,
+                },
+              }),
+            });
+
+            if (!res.ok) {
+              const body = await res.json().catch(() => ({}));
+              throw new Error(body.error ?? "verification failed");
+            }
+          }}
+          onSuccess={() => {
+            setError(null);
+            setStep(2);
+            void refresh();
+          }}
+          onError={(errorCode) => setError(`Verification failed: ${errorCode}`)}
+        />
+      )}
+    </div>
+  );
+}

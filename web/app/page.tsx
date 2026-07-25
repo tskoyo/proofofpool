@@ -1,88 +1,176 @@
-"use client";
+import Link from "next/link";
+import { Button, Card, Icon } from "@/components/ds";
+import type { IconName } from "@/components/ds";
+import { FeeCompareSection } from "@/components/fee-compare-section";
 
-import { useState } from "react";
-import { IDKitRequestWidget, selfieCheckLegacy } from "@worldcoin/idkit";
-import type { RpContext } from "@worldcoin/idkit-core";
+const navLinkStyle = {
+    color: "var(--text-secondary)",
+    textDecoration: "none",
+    fontSize: 14,
+    fontWeight: 500,
+} as const;
 
-const APP_ID = process.env.NEXT_PUBLIC_WLD_APP_ID as `app_${string}`;
-const ACTION = process.env.NEXT_PUBLIC_WLD_ACTION as string;
-const RP_ID = process.env.NEXT_PUBLIC_WLD_RP_ID as `rp_${string}`;
+function Nav() {
+    return (
+        <nav
+            style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 24,
+                padding: "20px 48px",
+                position: "sticky",
+                top: 0,
+                background: "rgba(250,249,246,.85)",
+                backdropFilter: "blur(8px)",
+                zIndex: 10,
+                borderBottom: "1px solid var(--border-subtle)",
+                flexWrap: "wrap",
+            }}
+        >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo-lockup.svg" alt="ProofPool" style={{ height: 28 }} />
+            <div style={{ display: "flex", gap: 32, alignItems: "center" }}>
+                <a href="#how" style={navLinkStyle}>
+                    How it works
+                </a>
+                <a href="#fees" style={navLinkStyle}>
+                    Fees
+                </a>
+                <Link href="/swap" style={navLinkStyle}>
+                    Launch app
+                </Link>
+            </div>
+        </nav>
+    );
+}
+
+function Hero() {
+    return (
+        <section style={{ padding: "110px 48px 90px", maxWidth: 820, margin: "0 auto", textAlign: "center" }}>
+            <div
+                style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "6px 14px",
+                    borderRadius: 999,
+                    background: "var(--accent-primary-soft)",
+                    color: "var(--green-700)",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    marginBottom: 28,
+                }}
+            >
+                Built on Uniswap v4 hooks
+            </div>
+            <h1
+                style={{
+                    fontSize: "clamp(36px, 8vw, 56px)",
+                    fontWeight: 700,
+                    letterSpacing: "var(--tracking-tight)",
+                    lineHeight: 1.08,
+                    margin: "0 0 24px",
+                }}
+            >
+                Prove you&rsquo;re human. Pay a lower fee.
+            </h1>
+            <p
+                style={{
+                    fontSize: 19,
+                    color: "var(--text-secondary)",
+                    lineHeight: 1.6,
+                    maxWidth: 560,
+                    margin: "0 auto 40px",
+                }}
+            >
+                ProofPool charges bots and sybil wallets the standard swap fee. Verify once with World ID and every swap
+                after gets the discounted human rate.
+            </p>
+            <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
+                <Link href="/swap" style={{ textDecoration: "none" }}>
+                    <Button variant="accent" size="l">
+                        Launch app
+                    </Button>
+                </Link>
+                <Link href="/verify" style={{ textDecoration: "none" }}>
+                    <Button variant="secondary" size="l">
+                        Verify with World ID
+                    </Button>
+                </Link>
+            </div>
+        </section>
+    );
+}
+
+const steps: { icon: IconName; t: string; d: string }[] = [
+    { icon: "wallet", t: "Connect your wallet", d: "Any standard EVM wallet works — no new account needed." },
+    {
+        icon: "scan-face",
+        t: "Verify with World ID",
+        d: "A Selfie Check proves you’re a unique human, without linking your identity to your wallet.",
+    },
+    {
+        icon: "shield-check",
+        t: "Swap at the human rate",
+        d: "Your wallet is registered on-chain. Every swap after gets the lower fee.",
+    },
+];
+
+function HowItWorks() {
+    return (
+        <section id="how" style={{ padding: "0 48px 110px", maxWidth: 960, margin: "0 auto" }}>
+            <h2 style={{ fontSize: 28, fontWeight: 600, textAlign: "center", marginBottom: 44 }}>
+                How verification works
+            </h2>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 20 }}>
+                {steps.map((s) => (
+                    <Card key={s.t}>
+                        <Icon
+                            name={s.icon}
+                            size={24}
+                            style={{ color: "var(--accent-primary)", marginBottom: 14, display: "block" }}
+                        />
+                        <div style={{ fontWeight: 600, marginBottom: 8 }}>{s.t}</div>
+                        <div style={{ color: "var(--text-secondary)", fontSize: 14, lineHeight: 1.55 }}>{s.d}</div>
+                    </Card>
+                ))}
+            </div>
+        </section>
+    );
+}
+
+function FooterSection() {
+    return (
+        <footer
+            style={{
+                background: "var(--ink-900)",
+                color: "var(--paper-0)",
+                padding: "56px 48px",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 24,
+                flexWrap: "wrap",
+            }}
+        >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo-lockup-dark.svg" alt="ProofPool" style={{ height: 26 }} />
+            <div style={{ color: "var(--ink-300)", fontSize: 13 }}>
+                Proof-of-human swap fees, built on Uniswap v4.
+            </div>
+        </footer>
+    );
+}
 
 export default function Home() {
-  const [open, setOpen] = useState(false);
-  const [address, setAddress] = useState("");
-  const [status, setStatus] = useState<string | null>(null);
-  const [rpContext, setRpContext] = useState<RpContext | null>(null);
-
-  async function fetchRpContext(): Promise<RpContext> {
-    const res = await fetch("/api/rp-signature", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: ACTION }),
-    }).then((r) => r.json());
-
-    return {
-      rp_id: RP_ID,
-      nonce: res.nonce,
-      created_at: res.created_at,
-      expires_at: res.expires_at,
-      signature: res.sig,
-    };
-  }
-
-  return (
-    <main style={{ padding: 32, fontFamily: "sans-serif", maxWidth: 480 }}>
-      <h1>ProofPool — Selfie Check</h1>
-      <p>Verify you&apos;re a unique human to unlock the low swap fee.</p>
-
-      <input
-        placeholder="Wallet address to verify"
-        value={address}
-        onChange={(e) => setAddress(e.target.value)}
-        style={{ width: "100%", padding: 8, marginBottom: 12 }}
-      />
-
-      <button
-        disabled={!address}
-        onClick={async () => {
-          setRpContext(await fetchRpContext());
-          setOpen(true);
-        }}
-        style={{ padding: "8px 16px" }}
-      >
-        Verify with Selfie Check
-      </button>
-
-      {rpContext && (
-        <IDKitRequestWidget
-          open={open}
-          onOpenChange={setOpen}
-          app_id={APP_ID}
-          action={ACTION}
-          rp_context={rpContext}
-          allow_legacy_proofs={true}
-          preset={selfieCheckLegacy({ signal: address })}
-          handleVerify={async (result) => {
-            setStatus("Verifying on-chain...");
-            const res = await fetch("/api/verify", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              // Forward the IDKit result as-is — the v4 verify endpoint expects
-              // the exact object IDKit returned, not a reshaped/renamed one.
-              body: JSON.stringify({ signal: address, result }),
-            });
-
-            if (!res.ok) {
-              const body = await res.json().catch(() => ({}));
-              throw new Error(body.error ?? "verification failed");
-            }
-          }}
-          onSuccess={() => setStatus("Verified! You now get the low swap fee.")}
-          onError={(errorCode) => setStatus(`Verification failed: ${errorCode}`)}
-        />
-      )}
-
-      {status && <p>{status}</p>}
-    </main>
-  );
+    return (
+        <>
+            <Nav />
+            <Hero />
+            <FeeCompareSection />
+            <HowItWorks />
+            <FooterSection />
+        </>
+    );
 }
