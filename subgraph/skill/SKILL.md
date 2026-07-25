@@ -68,6 +68,22 @@ user for the current endpoint rather than guessing a version number.
 
 **`RegistryConfig`** — `id`, `hook`, `maxSwaps`
 
+**`TransactionPoolCursor`** — internal scratch the mapping uses to join Hook and
+Router events inside a transaction. Queryable, but carries no analytical
+meaning. Ignore it.
+
+**`SwapRecord.swaps` vs `SwapRecord.uses`** — the same events from two sides.
+`uses` is the Registry's log, with the running count and timestamps: use it for
+cadence and allowance burn. `swaps` is the Hook's, with amounts, direction and
+pool: use it for value, and it is the only route from an attestation back to a
+wallet. The two should be the same length; a divergence means the index is
+broken, not that something interesting happened.
+
+**IDs do not join across contracts.** `Swap.id` and `DiscountedSwapUse.id` are
+both transaction hash + log index, but different log indices within the same
+transaction, so they never match. Join on `digest`, or through
+`Swap.usageRecord`.
+
 `_meta { block { number } hasIndexingErrors }` tells you how far the subgraph has
 synced. Check it when a user reports something missing — the answer is often
 that the subgraph is behind, not that the data is absent.
@@ -93,9 +109,17 @@ currency0's decimals, `*Volume1` in currency1's.
 **`digest` is `0x000…0` for unverified swaps.** A non-zero digest identifies the
 attestation that paid for the discount, and joins to `SwapRecord`.
 
-**`swapper` is only meaningful when the swap came through ProofPool's router.**
-Otherwise it is the calling router's address, and such a swap is never verified.
-A high `totalSwaps` on an address that is actually a router is not a busy trader.
+**`swapper` is the initiating account only when `verified: true` or
+`routerExecuted: true`.** Either flag means the address paid for and received the
+swap: the Registry rejects any attestation whose `subject` is not the swapper,
+and the router always reports its own caller. When neither is true, `swapper` is
+whatever contract called PoolManager — an aggregator, a periphery contract,
+another router — and you cannot tell a wallet from a contract. Never read a high
+`totalSwaps` there as a busy trader; that is how an aggregator ends up looking
+like a textbook bot.
+
+Note this is *initiating account*, not *human*. A contract can call the router,
+and a contract can hold an attestation issued to its own address.
 
 **Timestamps are Unix seconds as strings.** Convert before doing arithmetic.
 
@@ -103,6 +127,11 @@ A high `totalSwaps` on an address that is actually a router is not a busy trader
 
 This is the most common analytical question, and the honest answer is always
 probabilistic. You are looking at trading behaviour, not identity.
+
+**On the demo deployment the history is seeded synthetic traffic** — wallets
+scripted into behavioural archetypes. Say so when presenting a conclusion about
+any wallet; see [One thing to disclose](#one-thing-to-disclose). The detection is
+real, the traders were planted.
 
 Pull the wallet's swaps in time order:
 
@@ -259,20 +288,46 @@ count, and the volume fields for value. Give both — they usually differ, and t
 gap is interesting: verified wallets trading smaller amounts means something
 different from verified wallets trading more.
 
-**"Who burns their allowance fastest?"** Query `SwapRecord` ordered by
-`usageCount`, then `uses` for the timestamps. An attestation going from 1 to
-`maxSwaps` in seconds is a wallet front-loading its discount. Read `maxSwaps`
-from `RegistryConfig` rather than assuming — it is owner-configurable and may
-have changed.
+**"Who burns their allowance fastest?"** Neither `SwapRecord` nor
+`DiscountedSwapUse` stores a wallet, so the answer has to come back through
+`swaps`:
+
+```graphql
+{
+  swapRecords(orderBy: usageCount, orderDirection: desc, first: 10) {
+    usageCount
+    swaps(first: 1) { swapper { id } }
+    uses(orderBy: timestamp) { timestamp newCount }
+  }
+}
+```
+
+`swaps(first: 1)` is enough to identify the wallet: the digest commits to a
+single `subject`, and the Registry only grants the discount when `subject`
+equals the swapper, so every swap under one record belongs to one address.
+
+An attestation going from 1 to `maxSwaps` in seconds is a wallet front-loading
+its discount. Read `maxSwaps` from `RegistryConfig` rather than assuming — it is
+owner-configurable and may have changed.
 
 **"Did anyone bypass the router?"** `swaps(where: {routerExecuted: false})`.
 Those paid full fee regardless of verification, because the hook only trusts
 identity from ProofPool's own router.
 
-**"Did any wallet hold two attestations at once?"** Look for a wallet with
-overlapping `SwapRecord`s live in the same period. Attestations expire two
-epochs out, so verifying in consecutive epochs briefly allows up to twice
-`maxSwaps`. This is a known, documented trade-off, not an exploit.
+**"Did any wallet hold two attestations at once?"** Attestation expiry is not in
+this data — `validUntil` and `nonce` never leave calldata, and the Registry event
+carries only the digest and a count. So do not reason about overlapping validity
+windows. What is observable is overlapping *use*:
+
+```graphql
+{ swapper(id: "0x...") { swaps(orderBy: timestamp) { timestamp digest verified } } }
+```
+
+Two distinct non-zero digests whose timestamps interleave — A, B, A — mean both
+attestations were live at the same time, since a digest cannot be used outside
+its own validity. Consecutive but non-overlapping digests prove nothing either
+way. Report the interleaving you can see, and say that the validity windows
+themselves are off-chain and unverifiable from here.
 
 ## Working method
 
@@ -281,7 +336,10 @@ the actual rows and computing over them to asking the subgraph for something
 clever. GraphQL has no aggregation beyond what is stored.
 
 Use `first`, `orderBy`, `orderDirection`, and `where` to keep responses small.
-Default page size is 100; paginate with `skip` when a wallet has more.
+Default page size is 100; `first` caps at 1000 and `skip` at 5000. Nested lists
+like `swapper { swaps }` are subject to the same caps, so a wallet past 100 swaps
+is silently truncated unless you ask for more — check whether you hit the page
+size before concluding anything about a wallet's history.
 
 Show the numbers you reasoned from. A claim about cadence is only as good as the
 intervals behind it, and a user who can see them can check you.
