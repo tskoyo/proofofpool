@@ -84,8 +84,8 @@ function Hero() {
                     margin: "0 auto 40px",
                 }}
             >
-                ProofPool charges bots and sybil wallets the standard swap fee. Verify once with World ID and every swap
-                after gets the discounted human rate.
+                ProofPool charges anonymous wallets the standard swap fee and hands the difference to LPs. Pass a
+                World ID Selfie Check and your next swaps get the discounted human rate.
             </p>
             <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
                 <Link href="/swap" style={{ textDecoration: "none" }}>
@@ -108,12 +108,12 @@ const steps: { icon: IconName; t: string; d: string }[] = [
     {
         icon: "scan-face",
         t: "Verify with World ID",
-        d: "A Selfie Check proves you’re a unique human, without linking your identity to your wallet.",
+        d: "A Selfie Check proves a live human is present, without linking your identity to your wallet.",
     },
     {
         icon: "shield-check",
         t: "Swap at the human rate",
-        d: "Your wallet is registered on-chain. Every swap after gets the lower fee.",
+        d: "You carry a signed attestation to the pool. It covers a set number of swaps before it expires — verify again for more.",
     },
 ];
 

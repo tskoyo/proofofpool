@@ -199,7 +199,7 @@ export default function VerifyPage() {
             <Icon name="scan-face" size={36} style={{ color: "var(--text-primary)", margin: "0 auto 20px" }} />
             <div style={{ fontWeight: 600, fontSize: 20, marginBottom: 8 }}>Verify with World ID</div>
             <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 20 }}>
-              Complete a Selfie Check in the World App. This proves you&rsquo;re a unique human &mdash; it never
+              Complete a Selfie Check in the World App. This proves a live human is present &mdash; it never
               links your identity to your wallet.
             </p>
             <WalletChip address={address} style={{ margin: "0 auto 24px" }} />

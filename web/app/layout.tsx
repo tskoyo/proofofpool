@@ -5,7 +5,7 @@ import { AttestationProvider } from "@/lib/attestation";
 export const metadata: Metadata = {
   title: "ProofPool — proof-of-human swap fees",
   description:
-    "ProofPool charges bots and sybil wallets the standard swap fee. Verify once with World ID and every swap after gets the discounted human rate.",
+    "ProofPool charges anonymous wallets the standard swap fee and hands the difference to LPs. Pass a World ID Selfie Check and your next swaps get the discounted human rate.",
   icons: { icon: "/logo-mark.svg" },
 };
 

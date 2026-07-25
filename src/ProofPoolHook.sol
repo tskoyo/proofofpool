@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {BaseHook} from "v4-hooks-public/src/base/BaseHook.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
@@ -20,6 +21,7 @@ import {Registry} from "./Registry.sol";
 ///      patterns — it prices one boolean.
 contract ProofPoolHook is BaseHook {
     using LPFeeLibrary for uint24;
+    using PoolIdLibrary for PoolKey;
 
     error InvalidTrustedRouter();
     error InvalidRegistry();
@@ -40,7 +42,28 @@ contract ProofPoolHook is BaseHook {
     /// @notice The only router allowed to identify the wallet behind a swap.
     address public immutable TRUSTED_ROUTER;
 
-    event SwapPriced(address indexed swapper, bool verified, uint24 feeApplied, int256 amountSpecified);
+    /// @notice Emitted for every swap this hook prices, discounted or not.
+    /// @param poolId Pool the swap ran against. One hook deployment can serve
+    ///        several pools, so consumers must filter on this rather than assume.
+    /// @param swapper Wallet the fee was priced for. Only meaningful when the swap
+    ///        came through TRUSTED_ROUTER; otherwise it is the calling router,
+    ///        which is also why such a swap is never verified.
+    /// @param zeroForOne Swap direction, needed to know which currency
+    ///        `amountSpecified` refers to.
+    /// @param amountSpecified The requested amount as seen before the swap:
+    ///        negative is exact-input, positive exact-output. Settled amounts are
+    ///        not known here — join to PoolManager's own Swap event for those.
+    /// @param digest Attestation that paid for the discount, or zero when
+    ///        unverified. Joins this swap to Registry.DiscountedSwapRecorded.
+    event SwapPriced(
+        PoolId indexed poolId,
+        address indexed swapper,
+        bool verified,
+        uint24 feeApplied,
+        bool zeroForOne,
+        int256 amountSpecified,
+        bytes32 digest
+    );
 
     constructor(IPoolManager _poolManager, Registry _registry, address _trustedRouter) BaseHook(_poolManager) {
         require(_trustedRouter != address(0), InvalidTrustedRouter());
@@ -78,7 +101,7 @@ contract ProofPoolHook is BaseHook {
     ///
     ///      The pool MUST be initialized with LPFeeLibrary.DYNAMIC_FEE_FLAG set in
     ///      PoolKey.fee, or this override is silently ignored by PoolManager.
-    function _beforeSwap(address sender, PoolKey calldata, SwapParams calldata params, bytes calldata hookData)
+    function _beforeSwap(address sender, PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
         internal
         override
         returns (bytes4, BeforeSwapDelta, uint24)
@@ -93,7 +116,7 @@ contract ProofPoolHook is BaseHook {
         if (verified) {
             fee = VERIFIED_FEE;
         }
-        emit SwapPriced(swapper, verified, fee, params.amountSpecified);
+        emit SwapPriced(key.toId(), swapper, verified, fee, params.zeroForOne, params.amountSpecified, digest);
 
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, fee | LPFeeLibrary.OVERRIDE_FEE_FLAG);
     }

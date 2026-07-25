@@ -35,6 +35,57 @@ caller to choose an unrelated verified identity or make a different account
 pay for a low-fee swap. New trusted routers require a new hook deployment
 because the trusted-router address is immutable.
 
+## Event surface for indexers
+
+`ProofPoolHook.SwapPriced` is the protocol's data contract, not incidental
+logging. The hook keeps no aggregates and `Registry` stores only a per-digest
+count, so the verified/unverified split and the fee premium anonymous flow pays
+LPs exist *only* in these logs. Its fields are asserted in
+`ProofOfPoolHook.t.sol` for that reason — a silent field change would surface as
+wrong analytics rather than a failing build.
+
+```solidity
+event SwapPriced(
+    PoolId indexed poolId,
+    address indexed swapper,
+    bool verified,
+    uint24 feeApplied,
+    bool zeroForOne,
+    int256 amountSpecified,
+    bytes32 digest
+);
+```
+
+- `poolId` — one hook deployment can serve several pools. Consumers must filter
+  on it rather than assume a single pool.
+- `swapper` — only meaningful for swaps through `TRUSTED_ROUTER`. Otherwise it
+  is the calling router, which is also why such a swap is never verified.
+- `zeroForOne` — `amountSpecified`'s sign gives exact-input vs exact-output, not
+  direction. Without this an indexer cannot tell which currency the amount is
+  denominated in.
+- `digest` — the attestation that paid for the discount, or zero when
+  unverified. Joins to `Registry.DiscountedSwapRecorded(digest, newCount)`.
+  Because the digest commits to `subject`, and the nonce derives from
+  `HMAC(nullifier, epoch)`, distinct non-zero digests approximate the number of
+  Selfie Checks actually converted into swaps — the only on-chain proxy for a
+  verification funnel, since verification itself never touches the chain.
+
+### What is deliberately absent
+
+**Settled amounts.** `amountSpecified` is the *requested* amount, read in
+`beforeSwap`. Emitting settled deltas would mean enabling `afterSwap`, which
+would have to re-verify the attestation to know what it priced — a second
+signature recovery on every swap. Instead, indexers join to `PoolManager`'s own
+`Swap` event on transaction and pool id, which carries the settled deltas and
+the applied fee. The same join is what captures swaps that bypass
+`ProofPoolRouter` entirely: those reach `beforeSwap`, so `SwapPriced` fires with
+the router as `swapper` and `verified == false`, but no `SwapExecuted` is
+emitted and their amounts are only available from `PoolManager`.
+
+**Verification events.** The backend never sends a transaction, so nothing
+records an attestation being *issued* — only its use. An indexer can count
+discounts taken, never verifications attempted or abandoned.
+
 ## Planned upgrade: signed hook data
 
 The intended composable design accepts a per-swap authorization signed by the

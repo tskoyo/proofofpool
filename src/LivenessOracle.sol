@@ -6,18 +6,21 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @notice A backend-signed statement that `subject` passed a World Selfie Check.
-/// @dev Deliberately does not carry the World nullifier. It would be public in
-///      calldata on every swap, and nothing on-chain consumes it — see the Sybil
-///      note in README.md for what that costs us.
+/// @dev Deliberately does not carry the World nullifier in the clear: it would be
+///      public in calldata on every swap, letting anyone follow that human's
+///      trades. It reaches the chain only through `nonce` below, hashed. Nothing
+///      binds a nullifier to a single wallet — see the Sybil note in README.md.
 struct LivenessAttestation {
     /// @dev The wallet the discount applies to. Checked against the swapper by Registry.
     address subject;
     /// @dev Unix seconds. Set by the server; this is the only revocation lever,
     ///      since a signature cannot be withdrawn once issued.
     uint256 validUntil;
-    /// @dev Server-random. Distinguishes two attestations for the same subject and
-    ///      expiry, so re-verifying grants a fresh swap allowance rather than
-    ///      resuming the exhausted one.
+    /// @dev NOT random. The server derives it as HMAC(world nullifier, epoch), so
+    ///      replaying a proof inside its epoch rebuilds this struct byte for byte —
+    ///      same digest, same already-spent allowance. A random nonce would grant a
+    ///      fresh allowance on every replay and make Registry.maxSwaps decorative.
+    ///      A new allowance requires a new epoch, hence a new Selfie Check.
     uint256 nonce;
 }
 

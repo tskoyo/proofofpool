@@ -218,9 +218,11 @@ export async function POST(req: Request) {
     message: attestation,
   });
 
-  // The World nullifier is deliberately not included and not stored anywhere:
-  // nothing enforces one-human-one-address, which is the accepted Sybil gap in
-  // README.md. It is also not logged next to the wallet address.
+  // The nullifier is never returned, stored, or logged next to the wallet
+  // address — but it is not unused: it seeds the attestation nonce above, which
+  // is what makes a replayed proof rebuild the same digest and the same spent
+  // allowance. It rate-limits this wallet per epoch; it does not bind a human to
+  // one wallet, which is the accepted Sybil gap in README.md.
   return NextResponse.json({
     success: true,
     attested: true,

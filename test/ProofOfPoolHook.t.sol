@@ -8,6 +8,8 @@ import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {HookMiner} from "v4-periphery/test/shared/HookMiner.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 import {ProofPoolHook} from "../src/ProofPoolHook.sol";
@@ -18,7 +20,22 @@ import {LivenessAttestation, LivenessOracle} from "../src/LivenessOracle.sol";
 /// @notice Tests for the fee split, the trusted-router identity binding, and the
 ///         two limits on a liveness attestation (expiry AND swap cap).
 contract ProofPoolHookTest is Test, Deployers {
+    using PoolIdLibrary for PoolKey;
+
     error HookAddressMismatch(address expected, address actual);
+
+    /// @dev Mirrors ProofPoolHook.SwapPriced so vm.expectEmit can match it. Indexers
+    ///      read this event as the protocol's data contract, so the fields are
+    ///      asserted rather than left to compile-time checks alone.
+    event SwapPriced(
+        PoolId indexed poolId,
+        address indexed swapper,
+        bool verified,
+        uint24 feeApplied,
+        bool zeroForOne,
+        int256 amountSpecified,
+        bytes32 digest
+    );
 
     bytes32 internal constant SWAP_EVENT_SIGNATURE =
         keccak256("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)");
@@ -299,6 +316,50 @@ contract ProofPoolHookTest is Test, Deployers {
         assertEq(_recordedSwapFee(), hook.VERIFIED_FEE());
         assertEq(inputBefore - tokenIn.balanceOf(verifiedUser), SWAP_AMOUNT);
         assertEq(tokenOut.balanceOf(verifiedUser) - outputBefore, amountOut);
+    }
+
+    // --- SwapPriced event --------------------------------------------------
+
+    /// @notice A discounted swap must publish the attestation digest that paid for
+    ///         it, so an indexer can join it to Registry.DiscountedSwapRecorded.
+    function test_swapPricedCarriesPoolAndDigestWhenVerified() public {
+        (LivenessAttestation memory attestation, bytes memory signature) =
+            _attest(verifiedUser, block.timestamp + 1 hours);
+        bytes32 digest = oracle.hashAttestation(attestation);
+
+        vm.expectEmit(true, true, false, true, address(hook));
+        emit SwapPriced(
+            key.toId(), verifiedUser, true, hook.VERIFIED_FEE(), true, -int256(uint256(SWAP_AMOUNT)), digest
+        );
+
+        _swap(verifiedUser, attestation, signature);
+    }
+
+    /// @notice An unverified swap reports a zero digest — there is no attestation to
+    ///         attribute it to, and indexers rely on that to split the two flows.
+    function test_swapPricedCarriesZeroDigestWhenUnverified() public {
+        vm.expectEmit(true, true, false, true, address(hook));
+        emit SwapPriced(
+            key.toId(), unverifiedUser, false, hook.UNVERIFIED_FEE(), true, -int256(uint256(SWAP_AMOUNT)), bytes32(0)
+        );
+
+        _swapUnverified(unverifiedUser);
+    }
+
+    /// @notice Direction has to follow the swap, or an indexer attributes volume to
+    ///         the wrong currency.
+    function test_swapPricedReportsOneForZeroDirection() public {
+        ProofPoolRouter.ExactInputSingleParams memory params = _exactInputParams();
+        params.zeroForOne = false;
+        params.sqrtPriceLimitX96 = MAX_PRICE_LIMIT;
+
+        vm.expectEmit(true, true, false, true, address(hook));
+        emit SwapPriced(
+            key.toId(), unverifiedUser, false, hook.UNVERIFIED_FEE(), false, -int256(uint256(SWAP_AMOUNT)), bytes32(0)
+        );
+
+        vm.prank(unverifiedUser);
+        proofPoolRouter.exactInputSingle(params, _emptyAttestation(), "");
     }
 
     // --- Helpers -----------------------------------------------------------
