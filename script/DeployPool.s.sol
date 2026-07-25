@@ -25,7 +25,6 @@ import {IERC20} from "forge-std/interfaces/IERC20.sol";
 
 import {ProofPoolHook} from "../src/ProofPoolHook.sol";
 import {Registry} from "../src/Registry.sol";
-import {IWorldID} from "../src/interfaces/IWorldID.sol";
 
 /// @notice Deploys Registry + ProofPoolHook, initializes a WETH/USDC v4 po†ol
 ///         with a dynamic fee, and seeds it with initial liquidity — all on
@@ -34,7 +33,10 @@ import {IWorldID} from "../src/interfaces/IWorldID.sol";
 ///   forge script script/DeployPool.s.sol:DeployPool \
 ///     --rpc-url $SEPOLIA_RPC_URL --broadcast --verify -vvvv
 ///
-/// @dev Required env vars: PRIVATE_KEY, WORLD_ID_APP_ID, WORLD_ID_ACTION_ID.
+/// @dev Required env vars: PRIVATE_KEY, WORLD_ID_APP_ID, WORLD_ID_ACTION_ID,
+///      REGISTRY_ATTESTER. `REGISTRY_ATTESTER` is the backend's public address —
+///      the only address allowed to call `Registry.registerVerifiedHuman` after
+///      verifying a Selfie Check proof off-chain (see web/ for that backend).
 ///      Verify every address below against the source docs before a real
 ///      deployment — this file pins them as of the time this script was written.
 contract DeployPool is Script {
@@ -50,10 +52,6 @@ contract DeployPool is Script {
     address constant WETH = 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14;
     address constant USDC = 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238;
 
-    // --- World ID router on Sepolia (verify before use, see header note) ---
-    IWorldID constant WORLD_ID_ROUTER =
-        IWorldID(0x469449f251692E0779667583026b5A1E99512157);
-
     int24 constant TICK_SPACING = 60;
     // Illustrative starting price: 1 WETH = 3000 USDC. Adjust to the real
     // market price at deploy time if it matters for your demo.
@@ -68,10 +66,11 @@ contract DeployPool is Script {
     function run() external {
         string memory appId = vm.envString("WORLD_ID_APP_ID");
         string memory actionId = vm.envString("WORLD_ID_ACTION_ID");
+        address attester = vm.envAddress("REGISTRY_ATTESTER");
 
         vm.startBroadcast();
 
-        Registry registry = new Registry(WORLD_ID_ROUTER, appId, actionId);
+        Registry registry = new Registry(attester, appId, actionId);
         console2.log("Registry deployed at", address(registry));
 
         ProofPoolHook hook = _deployHook(registry);

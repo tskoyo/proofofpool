@@ -8,15 +8,14 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {HookMiner} from "v4-periphery/test/shared/HookMiner.sol";
 import {ProofPoolHook} from "../src/ProofPoolHook.sol";
 import {Registry} from "../src/Registry.sol";
-import {MockWorldID} from "./mocks/MockWorldID.sol";
 
 /// @notice Core tests for the fee-split mechanism. This is the minimum bar
 ///         before demo, per ENGINEERING.md section 5.
 contract ProofPoolHookTest is Test, Deployers {
     ProofPoolHook hook;
     Registry registry;
-    MockWorldID mockWorldId;
 
+    address attester = address(0xA77E5760);
     address verifiedUser = address(0xBEEF);
     address unverifiedUser = address(0xBAD);
 
@@ -25,8 +24,7 @@ contract ProofPoolHookTest is Test, Deployers {
         deployFreshManagerAndRouters();
         deployMintAndApprove2Currencies();
 
-        mockWorldId = new MockWorldID();
-        registry = new Registry(mockWorldId, "app_test", "verify-human");
+        registry = new Registry(attester, "app_test", "verify-human");
 
         // Mine a hook address whose low bits match our required permission flags.
         uint160 flags = uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG);
@@ -37,9 +35,10 @@ contract ProofPoolHookTest is Test, Deployers {
         hook = new ProofPoolHook{salt: salt}(manager, registry);
         require(address(hook) == hookAddress, "hook address mismatch");
 
-        // Verify our test "human" address via the mock World ID (always accepts).
-        uint256[8] memory emptyProof;
-        registry.verifyAndRegister(verifiedUser, 0, uint256(keccak256("nullifier-1")), emptyProof);
+        // Register our test "human" address, as the backend attester would after
+        // verifying a Selfie Check proof off-chain.
+        vm.prank(attester);
+        registry.registerVerifiedHuman(verifiedUser, uint256(keccak256("nullifier-1")));
 
         // Initialize the pool with the DYNAMIC_FEE_FLAG — required for fee
         // overrides to take effect, per Uniswap's docs. Skipping this is the
@@ -62,11 +61,17 @@ contract ProofPoolHookTest is Test, Deployers {
 
     /// @notice A nullifier can't be replayed to verify a second address.
     function test_nullifierCannotBeReplayed() public {
-        uint256[8] memory emptyProof;
         uint256 nullifier = uint256(keccak256("nullifier-1"));
 
+        vm.prank(attester);
         vm.expectRevert(abi.encodeWithSelector(Registry.DuplicateNullifier.selector, nullifier));
-        registry.verifyAndRegister(address(0xCAFE), 0, nullifier, emptyProof);
+        registry.registerVerifiedHuman(address(0xCAFE), nullifier);
+    }
+
+    /// @notice Only the backend attester can register a verified human.
+    function test_onlyAttesterCanRegister() public {
+        vm.expectRevert(Registry.NotAttester.selector);
+        registry.registerVerifiedHuman(address(0xCAFE), uint256(keccak256("nullifier-2")));
     }
 
     /// @notice A pool initialized WITHOUT the dynamic fee flag should not honor
