@@ -6,7 +6,6 @@ import { signRequest } from "@worldcoin/idkit-core/signing";
 export async function POST(request: Request) {
     const { action } = await request.json();
 
-    console.log(process.env.RP_SIGNING_KEY);
     const { sig, nonce, createdAt, expiresAt } = signRequest({
         signingKeyHex: process.env.RP_SIGNING_KEY!,
         action,
