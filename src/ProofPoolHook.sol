@@ -22,6 +22,8 @@ import {Registry} from "./Registry.sol";
 contract ProofPoolHook is BaseHook {
     using LPFeeLibrary for uint24;
 
+    error InvalidTrustedRouter();
+
     /// @notice Fee applied to swaps from verified-human addresses, in v4 fee units (100 = 0.01%).
     uint24 public constant VERIFIED_FEE = 500; // 0.05%
 
@@ -31,10 +33,15 @@ contract ProofPoolHook is BaseHook {
     /// @notice The registry this hook checks to determine verification status.
     Registry public immutable REGISTRY;
 
+    /// @notice The only router allowed to identify the wallet behind a swap.
+    address public immutable TRUSTED_ROUTER;
+
     event SwapPriced(address indexed swapper, bool verified, uint24 feeApplied, int256 amountSpecified);
 
-    constructor(IPoolManager _poolManager, Registry _registry) BaseHook(_poolManager) {
+    constructor(IPoolManager _poolManager, Registry _registry, address _trustedRouter) BaseHook(_poolManager) {
+        if (_trustedRouter == address(0)) revert InvalidTrustedRouter();
         REGISTRY = _registry;
+        TRUSTED_ROUTER = _trustedRouter;
     }
 
     /// @dev Declares which v4 callbacks this hook implements. Only beforeSwap
@@ -62,29 +69,46 @@ contract ProofPoolHook is BaseHook {
     /// @dev Overrides the swap fee based on the swapper's verification status.
     ///      The pool MUST be initialized with LPFeeLibrary.DYNAMIC_FEE_FLAG set
     ///      in PoolKey.fee, or this override is silently ignored by PoolManager.
-    function _beforeSwap(address sender, PoolKey calldata, SwapParams calldata, bytes calldata)
+    function _beforeSwap(address sender, PoolKey calldata, SwapParams calldata, bytes calldata hookData)
         internal
         view
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        uint24 fee = REGISTRY.isVerifiedHuman(sender) ? VERIFIED_FEE : UNVERIFIED_FEE;
+        (, bool verified) = _verificationStatus(sender, hookData);
+        uint24 fee = verified ? VERIFIED_FEE : UNVERIFIED_FEE;
 
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, fee | LPFeeLibrary.OVERRIDE_FEE_FLAG);
     }
 
-    /// @dev Emits the pricing decision post-execution so the subgraph can index
-    ///      real swap data (actual amounts) rather than intent.
-    function _afterSwap(address sender, PoolKey calldata, SwapParams calldata params, BalanceDelta, bytes calldata)
-        internal
-        override
-        returns (bytes4, int128)
-    {
-        bool verified = REGISTRY.isVerifiedHuman(sender);
+    /// @dev Emits the pricing decision and the swap's requested amount.
+    function _afterSwap(
+        address sender,
+        PoolKey calldata,
+        SwapParams calldata params,
+        BalanceDelta,
+        bytes calldata hookData
+    ) internal override returns (bytes4, int128) {
+        (address swapper, bool verified) = _verificationStatus(sender, hookData);
         uint24 fee = verified ? VERIFIED_FEE : UNVERIFIED_FEE;
 
-        emit SwapPriced(sender, verified, fee, params.amountSpecified);
+        emit SwapPriced(swapper, verified, fee, params.amountSpecified);
 
         return (BaseHook.afterSwap.selector, 0);
+    }
+
+    /// @dev Hook data is an identity claim, so it is ignored unless it came
+    ///      through the router that binds the claim to its caller and payer.
+    function _verificationStatus(address sender, bytes calldata hookData)
+        internal
+        view
+        returns (address swapper, bool verified)
+    {
+        if (sender != TRUSTED_ROUTER || hookData.length != 32) {
+            return (sender, false);
+        }
+
+        swapper = abi.decode(hookData, (address));
+        verified = swapper != address(0) && REGISTRY.isVerifiedHuman(swapper);
     }
 }

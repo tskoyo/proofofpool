@@ -9,7 +9,10 @@ Bots and disposable wallets pay the same fee as everyone else on every AMM pool 
 ## The 2 pieces
 
 **1. Uniswap v4 hook** — does the actual work.
-`beforeSwap` checks if `msg.sender` is verified. Verified = low fee. Not verified = high fee.
+`beforeSwap` checks the wallet identity supplied by the trusted ProofPool
+router. Verified = low fee. Not verified, or any untrusted router = high fee.
+See [DESIGN.md](./DESIGN.md) for the current trusted-router design and the
+planned signed-hook-data upgrade.
 
 **2. World Selfie Check** — makes "verified" mean something.
 User verifies once via IDKit, requesting only the `uniqueness` attribute — nothing else, no age/nationality/document data. Registry contract stores it. Hook reads from registry.
