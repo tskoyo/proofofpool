@@ -1,13 +1,21 @@
 import { NextResponse } from "next/server";
-import { createWalletClient, http, isAddress } from "viem";
+import { isAddress, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { sepolia } from "viem/chains";
 import { hashSignal } from "@worldcoin/idkit-core/hashing";
-import { registryAbi, REGISTRY_ADDRESS } from "@/lib/registry";
+import {
+  ATTESTATION_TYPES,
+  EIP712_DOMAIN_NAME,
+  EIP712_DOMAIN_VERSION,
+  serializeAttestation,
+  type LivenessAttestation,
+} from "@/lib/attestation-types";
+import { reserveAttestation } from "@/lib/nullifier-store";
 
 // Selfie Check has no on-chain verifier (only Orb does, groupId = 1), so the
 // proof is verified here against World's cloud endpoint and the result attested
-// on-chain by our own attester key.
+// by signing an EIP-712 struct the user carries to the pool. This route never
+// sends a transaction: the user pays their own gas by presenting the
+// attestation on each swap.
 //
 // The v4 endpoint is keyed by rp_id, not app_id, and takes the IDKit result
 // object verbatim as its request body — the shapes are identical. Do not
@@ -54,9 +62,9 @@ export async function POST(req: Request) {
   const expectedAction = process.env.WORLD_ACTION;
   const expectedEnvironment = process.env.WORLD_ENVIRONMENT;
 
-  // Only the World-verification config is required to get this far. The
-  // on-chain registration config is checked later, so the proof flow can be
-  // tested end-to-end before any contract is deployed.
+  // Only the World-verification config is required to get this far. The signing
+  // config is checked after verification, so the proof flow can be exercised
+  // before the contracts exist.
   if (!rpId || !expectedAction) {
     return NextResponse.json(
       { error: "server misconfigured: WORLD_RP_ID and WORLD_ACTION are required" },
@@ -147,36 +155,64 @@ export async function POST(req: Request) {
     return badRequest("verification failed", worldBody);
   }
 
-  const attesterKey = process.env.ATTESTER_PRIVATE_KEY as `0x${string}` | undefined;
-  const rpcUrl = process.env.RPC_URL;
+  const attesterKey = process.env.ATTESTER_PRIVATE_KEY as Hex | undefined;
+  const oracleAddress = process.env.NEXT_PUBLIC_ORACLE_ADDRESS as Address | undefined;
+  const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? "11155111");
+  const ttlSeconds = Number(process.env.ATTESTATION_TTL_SECONDS ?? "3600");
 
-  // Proof is valid. Registering it on-chain is a separate concern — report the
-  // verification result rather than failing it when the chain isn't wired up yet.
-  if (!attesterKey || !rpcUrl || !REGISTRY_ADDRESS) {
+  // The proof is valid; signing is a separate concern. Report success rather
+  // than failing when the signing side isn't configured yet.
+  if (!attesterKey || !oracleAddress) {
     return NextResponse.json({
       success: true,
-      registered: false,
-      reason: "chain not configured: set ATTESTER_PRIVATE_KEY, RPC_URL and REGISTRY_ADDRESS",
+      attested: false,
+      reason: "signing not configured: set ATTESTER_PRIVATE_KEY and NEXT_PUBLIC_ORACLE_ADDRESS",
     });
   }
 
-  const walletClient = createWalletClient({
-    account: privateKeyToAccount(attesterKey),
-    chain: sepolia,
-    transport: http(rpcUrl),
+  const account = privateKeyToAccount(attesterKey);
+  const validUntil = Math.floor(Date.now() / 1000) + ttlSeconds;
+
+  // A verified proof is not single-use: replaying a captured one would mint a
+  // fresh nonce, hence a fresh digest, hence a reset swap allowance. Allow at
+  // most one live attestation per human so the cap can't be farmed.
+  const reservation = reserveAttestation(selfie.nullifier, validUntil);
+  if (!reservation.ok) {
+    return badRequest("an attestation for this person is still active", {
+      retryAfter: reservation.retryAfter,
+    });
+  }
+
+  const attestation: LivenessAttestation = {
+    subject: signal,
+    validUntil: BigInt(validUntil),
+    // Random, so re-verifying after expiry produces a different digest and
+    // therefore a fresh swap allowance instead of resuming an exhausted one.
+    nonce: BigInt(`0x${crypto.randomUUID().replace(/-/g, "")}`),
+  };
+
+  // The signature is bound to this specific oracle deployment through the
+  // domain's verifyingContract and chainId — it cannot be replayed against
+  // another deployment or another chain.
+  const signature = await account.signTypedData({
+    domain: {
+      name: EIP712_DOMAIN_NAME,
+      version: EIP712_DOMAIN_VERSION,
+      chainId,
+      verifyingContract: oracleAddress,
+    },
+    types: ATTESTATION_TYPES,
+    primaryType: "LivenessAttestation",
+    message: attestation,
   });
 
-  try {
-    const txHash = await walletClient.writeContract({
-      address: REGISTRY_ADDRESS,
-      abi: registryAbi,
-      functionName: "registerVerifiedHuman",
-      args: [signal, BigInt(selfie.nullifier)],
-    });
-
-    return NextResponse.json({ success: true, registered: true, txHash });
-  } catch (err) {
-    // Most likely DuplicateNullifier — this human already registered an address.
-    return badRequest("registration failed", (err as Error).message);
-  }
+  // The World nullifier is deliberately not included and not stored anywhere:
+  // nothing enforces one-human-one-address, which is the accepted Sybil gap in
+  // README.md. It is also not logged next to the wallet address.
+  return NextResponse.json({
+    success: true,
+    attested: true,
+    attestation: serializeAttestation(attestation),
+    signature,
+  });
 }

@@ -9,11 +9,15 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 
+import {LivenessAttestation} from "./LivenessOracle.sol";
+
 /// @title ProofPoolRouter
 /// @notice Minimal exact-input router that binds the identity seen by a
 ///         ProofPoolHook to the wallet that pays for and receives the swap.
-/// @dev This MVP router supports ERC-20 pairs only. The caller cannot supply a
-///      different identity, payer, recipient, or arbitrary hook data.
+/// @dev This MVP router supports ERC-20 pairs only. The caller supplies an
+///      attestation but never an identity: the hook data always carries
+///      `msg.sender`, so an attestation issued to somebody else fails the
+///      subject check in Registry rather than granting them a discount.
 contract ProofPoolRouter is IUnlockCallback {
     error DeadlineExpired(uint256 deadline);
     error InvalidAmount();
@@ -39,6 +43,7 @@ contract ProofPoolRouter is IUnlockCallback {
 
     struct CallbackData {
         address swapper;
+        bytes hookData;
         ExactInputSingleParams params;
     }
 
@@ -51,7 +56,14 @@ contract ProofPoolRouter is IUnlockCallback {
 
     /// @notice Swap an exact amount of one ERC-20 for the other pool currency.
     /// @dev `msg.sender` is always the identity, payer, and recipient.
-    function exactInputSingle(ExactInputSingleParams calldata params) external returns (uint256 amountOut) {
+    /// @param attestation Backend-signed proof of liveness. Ignored when
+    ///        `signature` is empty, which is how an unverified swap is made.
+    /// @param signature The trusted signer's signature over `attestation`.
+    function exactInputSingle(
+        ExactInputSingleParams calldata params,
+        LivenessAttestation calldata attestation,
+        bytes calldata signature
+    ) external returns (uint256 amountOut) {
         if (block.timestamp > params.deadline) revert DeadlineExpired(params.deadline);
         if (params.amountIn == 0) revert InvalidAmount();
         if (Currency.unwrap(params.key.currency0) == address(0) || Currency.unwrap(params.key.currency1) == address(0))
@@ -59,7 +71,14 @@ contract ProofPoolRouter is IUnlockCallback {
             revert NativeCurrencyUnsupported();
         }
 
-        bytes memory result = POOL_MANAGER.unlock(abi.encode(CallbackData({swapper: msg.sender, params: params})));
+        // Without a signature there is nothing for the hook to verify, so send the
+        // identity alone and save the caller the attestation calldata.
+        bytes memory hookData = signature.length == 0
+            ? abi.encode(msg.sender)
+            : abi.encode(msg.sender, attestation, signature);
+
+        bytes memory result =
+            POOL_MANAGER.unlock(abi.encode(CallbackData({swapper: msg.sender, hookData: hookData, params: params})));
         (uint256 amountIn, uint256 received) = abi.decode(result, (uint256, uint256));
 
         if (received < params.amountOutMinimum) {
@@ -88,7 +107,7 @@ contract ProofPoolRouter is IUnlockCallback {
                 amountSpecified: -int256(uint256(params.amountIn)),
                 sqrtPriceLimitX96: params.sqrtPriceLimitX96
             }),
-            abi.encode(data.swapper)
+            data.hookData
         );
 
         int128 inputDelta = params.zeroForOne ? delta.amount0() : delta.amount1();

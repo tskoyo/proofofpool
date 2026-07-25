@@ -21,6 +21,7 @@ import {FixedPointMathLib} from "solmate/src/utils/FixedPointMathLib.sol";
 import {ProofPoolHook} from "../src/ProofPoolHook.sol";
 import {ProofPoolRouter} from "../src/ProofPoolRouter.sol";
 import {Registry} from "../src/Registry.sol";
+import {LivenessOracle} from "../src/LivenessOracle.sol";
 
 /// @notice Deploys Registry + ProofPoolRouter + ProofPoolHook, initializes a
 ///         WETH/USDC v4 pool with a dynamic fee, and seeds it with initial
@@ -30,11 +31,11 @@ import {Registry} from "../src/Registry.sol";
 ///     --rpc-url $SEPOLIA_RPC_URL --broadcast --verify -vvvv
 ///
 /// @dev Required env vars: PRIVATE_KEY, WORLD_ID_APP_ID, WORLD_ID_ACTION_ID,
-///      REGISTRY_ATTESTER, TOKEN_USDC, TOKEN_WBTC.
+///      TRUSTED_SIGNER, CONTRACTS_OWNER, MAX_SWAPS, TOKEN_USDC, TOKEN_WBTC.
 ///
-///      `REGISTRY_ATTESTER` is the backend's public address — the only address
-///      allowed to call `Registry.registerVerifiedHuman` after verifying a
-///      Selfie Check proof off-chain (see web/ for that backend).
+///      `TRUSTED_SIGNER` is the backend's public address — the key whose
+///      signature over a LivenessAttestation grants the discounted fee (see
+///      web/ for that backend). It must match ATTESTER_PRIVATE_KEY in web/.env.
 ///
 ///      `TOKEN_USDC` / `TOKEN_WBTC` are the pair this pool trades; run
 ///      script/DeployTestTokens.s.sol first and use the addresses it prints.
@@ -69,15 +70,21 @@ contract DeployPool is Script {
     uint160 initialSqrtPriceX96;
 
     function run() external {
-        string memory appId = vm.envString("WORLD_ID_APP_ID");
-        string memory actionId = vm.envString("WORLD_ID_ACTION_ID");
-        address attester = vm.envAddress("REGISTRY_ATTESTER");
+        // Public address of the backend key that signs liveness attestations.
+        address trustedSigner = vm.envAddress("TRUSTED_SIGNER");
+        // Discounted swaps allowed per attestation; 0 means uncapped.
+        uint256 maxSwaps = vm.envUint("MAX_SWAPS");
+        // Owner of both contracts: rotates the signer, sets the hook and the cap.
+        address owner = vm.envAddress("CONTRACTS_OWNER");
 
         _configurePair(vm.envAddress("TOKEN_USDC"), vm.envAddress("TOKEN_WBTC"));
 
         vm.startBroadcast();
 
-        Registry registry = new Registry(attester, appId, actionId);
+        LivenessOracle oracle = new LivenessOracle(trustedSigner, owner);
+        console2.log("LivenessOracle deployed at", address(oracle));
+
+        Registry registry = new Registry(oracle, maxSwaps, owner);
         console2.log("Registry deployed at", address(registry));
 
         ProofPoolRouter router = new ProofPoolRouter(POOL_MANAGER);
@@ -85,6 +92,18 @@ contract DeployPool is Script {
 
         ProofPoolHook hook = _deployHook(registry, router);
         console2.log("ProofPoolHook deployed at", address(hook));
+
+        // The hook's CREATE2 address depends on the registry, so this link can
+        // only be made now. Without it every recordSwap reverts NotHook and no
+        // swap can ever take the discount.
+        if (owner == msg.sender) {
+            registry.setHook(address(hook));
+            console2.log("Registry.hook wired to the deployed hook");
+        } else {
+            console2.log("WARNING: owner is not the deployer. Call registry.setHook() as owner:");
+            console2.log("  registry:", address(registry));
+            console2.log("  hook:    ", address(hook));
+        }
 
         PoolKey memory key = _buildPoolKey(hook);
         POOL_MANAGER.initialize(key, initialSqrtPriceX96);
@@ -97,9 +116,9 @@ contract DeployPool is Script {
     }
 
     /// @dev Mines a CREATE2 salt so the deployed hook address encodes the
-    ///      beforeSwap/afterSwap permission flags, then deploys via that salt.
+    ///      beforeSwap permission flag, then deploys via that salt.
     function _deployHook(Registry registry, ProofPoolRouter router) internal returns (ProofPoolHook hook) {
-        uint160 flags = uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG);
+        uint160 flags = uint160(Hooks.BEFORE_SWAP_FLAG);
         (address predicted, bytes32 salt) = HookMiner.find(
             CREATE2_DEPLOYER,
             flags,
