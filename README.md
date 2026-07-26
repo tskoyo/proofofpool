@@ -2,6 +2,22 @@
 
 Uniswap v4 hook that charges unverified addresses more on every swap, and shares that extra fee with LPs. World Selfie Check proves a live human authorized the swap — not that the wallet belongs to a unique one.
 
+## Try it — temporary live instance
+
+**https://claimed-tourism-sculpture-trial.trycloudflare.com**
+
+Running against the [contracts deployed on Sepolia](#deployments--ethereum-sepolia-chain-id-11155111)
+below — same hook, same pool, same Subgraph. Nothing about it is mocked.
+
+**This is a laptop behind a tunnel, up for the judging window only.** The URL
+dies when that process stops, and it will not come back at this address. If it
+does not load, the project is unaffected — everything it talks to is on-chain
+and independently reachable, and [SETUP.md](./SETUP.md) brings up your own copy.
+
+To actually swap you need Sepolia ETH for gas. The two demo ERC-20s have a
+public unrestricted `mint`, so fund yourself from any wallet — no faucet needed
+for the tokens, only for gas. Approve `ProofPoolRouter` before the first swap.
+
 ## Why
 
 Bots and disposable wallets pay the same fee as everyone else on every AMM pool right now. We tax them instead. Doesn't stop bots, doesn't detect sandwich attacks — just makes anonymous flow more expensive and gives that money to LPs. We say this out loud in the pitch, don't oversell it.
