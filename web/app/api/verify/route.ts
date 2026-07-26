@@ -167,10 +167,7 @@ export async function POST(req: Request) {
 
   const worldBody: unknown = await worldRes.json().catch(() => null);
 
-  // TODO(pre-launch): drop this. It exists to capture the real v4 response shape
-  // on the first sandbox run; the body carries a nullifier, so it shouldn't be
-  // logged next to a wallet address in production.
-  console.log("[world-verify]", worldRes.status, JSON.stringify(worldBody));
+  // Log worldRes.status alone if you need to debug a rejection.
 
   if (!worldRes.ok) {
     return badRequest("verification failed", worldBody);

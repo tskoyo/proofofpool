@@ -66,12 +66,27 @@ event SwapPriced(
 - `zeroForOne` — `amountSpecified`'s sign gives exact-input vs exact-output, not
   direction. Without this an indexer cannot tell which currency the amount is
   denominated in.
-- `digest` — the attestation that paid for the discount, or zero when
-  unverified. Joins to `Registry.DiscountedSwapRecorded(digest, newCount)`.
-  Because the digest commits to `subject`, and the nonce derives from
-  `HMAC(nullifier, epoch)`, distinct non-zero digests approximate the number of
-  Selfie Checks actually converted into swaps — the only on-chain proxy for a
-  verification funnel, since verification itself never touches the chain.
+- `digest` — the attestation that was **presented**, which is not the same as
+  the one that paid. `LivenessOracle.verify` hashes the attestation before
+  checking expiry or signer and returns that digest either way, so a presented
+  attestation that is expired, wrongly signed, or out of allowance emits
+  `verified == false` alongside a non-zero digest. Only a `subject`/`swapper`
+  mismatch yields zero. Consumers must read `verified`, never `digest != 0`, to
+  decide whether a discount was granted.
+
+  That refused-presentation case is worth indexing rather than filtering: it is
+  the only on-chain trace of a wallet trying to spend an allowance it no longer
+  had, and it distinguishes wallets that never verify from wallets that verified
+  and then ran out.
+
+  Honoured digests join to `Registry.DiscountedSwapRecorded(digest, newCount)`;
+  refused ones have no Registry event, because `recordSwap` is only called when
+  `verified`. Because the digest commits to `subject`, and the nonce derives
+  from `HMAC(nullifier, epoch)`, distinct digests **on verified swaps**
+  approximate the number of Selfie Checks actually converted into swaps — the
+  only on-chain proxy for a verification funnel, since verification itself never
+  touches the chain. Counting distinct digests without that filter overstates
+  it.
 
 ### What is deliberately absent
 

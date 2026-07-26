@@ -88,6 +88,69 @@ transaction, so they never match. Join on `digest`, or through
 synced. Check it when a user reports something missing — the answer is often
 that the subgraph is behind, not that the data is absent.
 
+## Read the configuration first
+
+`maxSwaps` is how many discounted swaps one attestation buys, and each
+attestation required a **live Selfie Check** — a real face, at that moment,
+which is the one thing in this system that cannot be scripted. So `maxSwaps` is
+effectively *the number of swaps a wallet may automate per proven human
+presence*, and it rescales almost every answer this skill gives. Read it before
+interpreting anything.
+
+```graphql
+{ registryConfigs { maxSwaps hook } }
+```
+
+### It is a timeline, not a value — read it at the swap's block
+
+`maxSwaps` is owner-configurable and **has changed on the demo deployment**.
+Reading today's value and applying it to older swaps is the same error as
+guessing, just harder to notice: those swaps were made under a different rule.
+
+The Graph answers historical queries directly. Pin the block:
+
+```graphql
+{ registryConfigs(block: {number: 11350000}) { maxSwaps } }
+```
+
+So, whenever the cap matters to an answer:
+
+1. Get the block range of the swaps you are analysing (`blockNumber` on `Swap`).
+2. Query `registryConfigs` at the **start** and **end** of that range.
+3. If the two differ, the cap changed mid-history. Segment your analysis at the
+   boundary and say so — do not average across it.
+
+Find the boundary by bisecting on `block: {number: N}` between the two. Anything
+below the subgraph's `startBlock` errors rather than returning empty, which is a
+useful floor: the error message names the earliest available block.
+
+On the demo deployment the boundary is **block 11350309**: null below it, `10` at
+or after. Roughly a third of the indexed history sits below that block, so for a
+substantial slice of these swaps the cap is genuinely unknown — say which swaps
+fall in that slice rather than back-filling them with today's value.
+
+Time-travel works on every entity, not just this one.
+
+### When it reads null
+
+**Null is expected, and it does not mean uncapped.** The Registry's constructor
+sets the initial cap without emitting `MaxSwapsUpdated`, so until an owner
+changes it there is no event for the subgraph to index. Null means *not
+observed*; uncapped is the value `0`, which is a real setting.
+
+Either ask the user what the cap is, or read it from the Registry directly if
+you have chain access — noting this gives you the cap *now*, not at the block
+you care about:
+
+```bash
+cast call <registry> "maxSwaps()(uint256)" --rpc-url <sepolia rpc>
+```
+
+Do not proceed as if the cap were 1 or 10 — the difference between those two
+readings flips a wallet from "clearly a person" to "a person with a script", and
+guessing it silently is the worst failure this skill can have. Say the cap is
+unknown, give the reasoning both ways if it matters, and ask.
+
 ## Reading the fields correctly
 
 These are the traps. Getting them wrong produces confident wrong answers.
@@ -103,11 +166,65 @@ but no settled figures — say so rather than treating null as zero.
 
 **Volume totals on `Pool` are requested exact-input amounts**, in raw token
 units, split by which currency was paid in. Exact-output swaps are counted in
-`totalSwaps` but contribute no volume. Denominate carefully: `*Volume0` is in
-currency0's decimals, `*Volume1` in currency1's.
+`totalSwaps` but contribute no volume.
 
-**`digest` is `0x000…0` for unverified swaps.** A non-zero digest identifies the
-attestation that paid for the discount, and joins to `SwapRecord`.
+Every amount in this Subgraph is raw base units. There is no `Token` entity, so
+decimals are not in the data — apply them yourself. On the demo deployment:
+
+| | Token | Decimals | Fields |
+|---|---|---|---|
+| `currency0` | MyWBTC | **8** | `*Volume0`, and `amountSpecified` when `zeroForOne: true` |
+| `currency1` | MyUSDC | **6** | `*Volume1`, and `amountSpecified` when `zeroForOne: false` |
+
+v4 orders currencies by address, so `currency0` is **not** the "base" asset in
+any economic sense — here it happens to be the 8-decimal one. Read
+`pool { currency0 currency1 }` and confirm against the addresses rather than
+assuming this holds on another deployment.
+
+`zeroForOne: true` means currency0 was paid *in*. Getting this backwards
+attributes volume to the wrong token and silently rescales it by 100x, since the
+two decimals differ by two.
+
+**A non-zero `digest` means an attestation was *presented*, not that a discount
+was *granted*.** This is the single easiest field to get wrong, and getting it
+wrong silently inflates every verification number you report.
+
+`LivenessOracle.verify` hashes the attestation before it checks anything, and
+returns that digest whether or not the attestation holds. So a swap that
+presented an expired attestation, or one signed by a rotated-out key, or a valid
+one whose allowance was already spent, emits `verified: false` with a **non-zero
+digest**. Only a `subject`/`swapper` mismatch returns zero.
+
+The invariant is therefore *not* `verified ⟺ digest != 0`. It is:
+
+| `verified` | `digest` | Meaning |
+|---|---|---|
+| `true` | non-zero | Attestation presented and honoured. Paid 500. |
+| `false` | non-zero | Attestation presented and **refused** — expired, wrong signer, or allowance exhausted. Paid 3000. |
+| `false` | zero | No attestation offered at all (or `subject` did not match the swapper). Paid 3000. |
+
+What holds unconditionally is `verified ⟺ feeApplied == 500`.
+
+**Use the middle row — it is real behavioural data, not noise.** It is the only
+observable trace of a wallet trying to spend an allowance it no longer had, and
+it separates two populations the docs would otherwise merge: wallets that never
+verify, and wallets that verified and then ran out. Those mean very different
+things about a person.
+
+```graphql
+{ swaps(first: 1000, where: {verified: false, digest_not: "0x0000000000000000000000000000000000000000000000000000000000000000"}) {
+    swapper { id } digest timestamp usageRecord { usageCount } } }
+```
+
+If `usageRecord` is null, that attestation never completed a single discounted
+swap — it expired or was rejected outright. If it is non-null, compare
+`usageCount` against `maxSwaps`: equal means the wallet hit its cap and kept
+trading at full fee, which is a wallet that wanted the discount and could not
+get it.
+
+**Never count distinct non-zero digests as "verifications that converted".**
+That figure includes refused presentations. Count distinct digests on swaps with
+`verified: true`.
 
 **`swapper` is the initiating account only when `verified: true` or
 `routerExecuted: true`.** Either flag means the address paid for and received the
@@ -156,21 +273,12 @@ Pull the wallet's swaps in time order:
 Address ids are lowercase hex. If `swapper` returns null, try lowercasing before
 concluding the address never traded.
 
-### Read the configuration first — it changes what everything means
+### Read the cap first — it changes what everything means
 
-Before interpreting anything, get `maxSwaps`:
-
-```graphql
-{ registryConfigs { maxSwaps hook } }
-```
-
-`maxSwaps` is how many discounted swaps one attestation buys, and each
-attestation required a **live Selfie Check** — a real face, at that moment,
-which is the one thing in this system that cannot be scripted. So `maxSwaps` is
-effectively *the number of swaps a wallet may automate per proven human
-presence*.
-
-That single number rescales the whole analysis:
+Get `maxSwaps` for this wallet's block range before going further, and mind that
+it is a timeline rather than a fixed value — see
+[Read the configuration first](#read-the-configuration-first). That single number
+rescales the whole analysis:
 
 | `maxSwaps` | What 20 verified swaps means |
 |---|---|
@@ -178,28 +286,13 @@ That single number rescales the whole analysis:
 | 10 | 2 verifications. A human verified twice; a script could have done the rest. |
 | 0 (uncapped) | Expiry alone bounds it. Verification count says little. |
 
-Count the wallet's **distinct non-zero `digest` values** — that is how many times
-a human actually stood in front of a camera for it. `verifiedSwaps ÷ distinct
-digests` tells you how much automation each human moment authorised. And because
-the backend issues at most one attestation per wallet per epoch, distinct digests
-also tell you across how many separate time windows that person showed up.
-
-**`maxSwaps` is often null, and that is expected.** The Registry's constructor
-sets the initial cap without emitting `MaxSwapsUpdated`, so until an owner
-changes it there is no event for the subgraph to index. Null means *not
-observed*, not *uncapped* — uncapped is the value `0`, which is a real setting.
-
-When it is null, either ask the user what the cap is, or read it from the
-Registry directly if you have chain access:
-
-```bash
-cast call <registry> "maxSwaps()(uint256)" --rpc-url <sepolia rpc>
-```
-
-Do not proceed as if the cap were 1 or 10 — the difference between those two
-readings flips a wallet from "clearly a person" to "a person with a script", and
-guessing it silently is the worst failure this skill can have. Say the cap is
-unknown, give the reasoning both ways if it matters, and ask.
+Count the wallet's **distinct digests across its `verified: true` swaps** (only
+honoured ones — see the digest table above) — that is how many times a human
+actually stood in front of a camera and got the discount for it.
+`verifiedSwaps ÷ distinct honoured digests` tells you how much automation each
+human moment authorised. And because the backend issues at most one attestation
+per wallet per epoch, distinct honoured digests also tell you across how many
+separate time windows that person showed up.
 
 ### Then weigh the behavioural evidence
 
@@ -277,11 +370,46 @@ accuse it.
 
 ## Other common questions
 
-**"How much extra did anonymous flow pay LPs?"** The premium is the fee
-difference on unverified volume: `unverifiedVolume × (3000 − 500) / 1_000_000`,
-per currency, in raw units. Convert with the token's decimals before presenting.
-Say it is based on requested exact-input volume, which excludes exact-output
-swaps.
+**"How much extra did anonymous flow pay LPs?"** Report this as a **floor plus a
+named remainder**, never as a single number.
+
+The floor is the fee difference on stored unverified volume, per currency, in
+raw units:
+
+```
+premium = unverifiedVolume × (3000 − 500) / 1_000_000
+```
+
+That is a floor and not a total, because `Pool.*Volume*` accumulates only
+*requested exact-input* amounts. Exact-output swaps (`amountSpecified > 0`) are
+counted in `totalSwaps` but contribute no volume, so their premium is missing
+from the figure.
+
+Some of that gap is recoverable and some is not — separate the two rather than
+dropping both:
+
+- **Recoverable:** an exact-output swap with `routerExecuted: true` has a
+  settled `amountIn`. Add it to the matching currency and you have measured it.
+- **Unmeasurable:** an exact-output swap with `routerExecuted: false` has no
+  settled amount anywhere in this Subgraph. Count these and report the count.
+  Do not estimate them.
+
+So the honest shape of the answer is: *"at least X, plus Y recovered from
+exact-output swaps, with N swaps whose contribution is not measurable from this
+data."* Check the exact-output population before writing any of this — if it is
+empty, say the floor is the complete figure and move on rather than hedging
+about a gap that does not exist:
+
+```graphql
+{ swaps(first: 1000, where: {verified: false, amountSpecified_gt: "0"}) {
+    routerExecuted amountIn zeroForOne } }
+```
+
+Convert with each token's decimals before presenting. Note the fee tiers are
+compile-time constants in the hook (`VERIFIED_FEE = 500`,
+`UNVERIFIED_FEE = 3000`) — they cannot be changed without redeploying, so unlike
+`maxSwaps` you may rely on them. Sanity-check against `feeApplied` on real rows
+anyway if the numbers look wrong.
 
 **"What share of activity is verified?"** `verifiedSwaps / totalSwaps` for
 count, and the volume fields for value. Give both — they usually differ, and the
@@ -307,8 +435,8 @@ single `subject`, and the Registry only grants the discount when `subject`
 equals the swapper, so every swap under one record belongs to one address.
 
 An attestation going from 1 to `maxSwaps` in seconds is a wallet front-loading
-its discount. Read `maxSwaps` from `RegistryConfig` rather than assuming — it is
-owner-configurable and may have changed.
+its discount — read the cap at those swaps' block, not today's
+([why](#it-is-a-timeline-not-a-value--read-it-at-the-swaps-block)).
 
 **"Did anyone bypass the router?"** `swaps(where: {routerExecuted: false})`.
 Those paid full fee regardless of verification, because the hook only trusts
@@ -323,11 +451,50 @@ windows. What is observable is overlapping *use*:
 { swapper(id: "0x...") { swaps(orderBy: timestamp) { timestamp digest verified } } }
 ```
 
-Two distinct non-zero digests whose timestamps interleave — A, B, A — mean both
-attestations were live at the same time, since a digest cannot be used outside
-its own validity. Consecutive but non-overlapping digests prove nothing either
-way. Report the interleaving you can see, and say that the validity windows
-themselves are off-chain and unverifiable from here.
+Two distinct digests **on `verified: true` swaps** whose timestamps interleave —
+A, B, A — mean both attestations were live at the same time, since a digest
+cannot be *honoured* outside its own validity. Restrict to honoured swaps before
+concluding anything: a digest appearing on an unverified swap was refused, which
+is evidence it was **not** live, and reading it as overlap inverts the finding.
+Consecutive but non-overlapping digests prove nothing either way. Report the
+interleaving you can see, and say that the validity windows themselves are
+off-chain and unverifiable from here.
+
+## Reconcile before you report
+
+This Subgraph stores the same quantities twice, by different routes, on purpose.
+Checking them against each other costs one extra query and turns "here are some
+numbers" into "here are some numbers, and here is why you can believe them".
+Do this whenever you are producing a written summary rather than answering a
+one-line question.
+
+Three checks, in increasing order of what they catch:
+
+**1. Aggregates against rows.** Re-derive `Pool.unverifiedVolume0/1` by summing
+`|amountSpecified|` over unverified exact-input swaps, grouped by `zeroForOne`.
+They must match exactly. A mismatch means the mapping and the raw log disagree,
+and nothing downstream is trustworthy.
+
+**2. Aggregates against the contract.** The hook keeps its own on-chain
+`demoPoolStats`, written field-for-field with what the mapping computes. If you
+have chain access, read it and compare — this catches an indexing error that
+check 1 cannot, because check 1 only proves the mapping is self-consistent:
+
+```bash
+cast call <hook> "demoPoolStats(bytes32)" <poolId> --rpc-url <sepolia rpc>
+```
+
+**3. Both sides of an attestation.** `SwapRecord.swaps` (hook side) and
+`SwapRecord.uses` (registry side) are the same events observed from two
+contracts. Their lengths must be equal. Divergence means the index is broken,
+not that something interesting happened.
+
+Also check `_meta { block { number } hasIndexingErrors }` first, always. A
+surprising answer is more often a subgraph that is behind than a real finding.
+
+State the result of these checks in your output, including when they pass. "The
+stored aggregates reconcile exactly against 290 indexed rows" is a sentence that
+earns the rest of the analysis its credibility.
 
 ## Working method
 

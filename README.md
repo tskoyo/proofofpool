@@ -43,22 +43,29 @@ never stored and never logged next to a wallet address.
 This is what Selfie Check can actually back — liveness at signing time — and the
 mechanism claims nothing more. See [Known limitations](#known-limitations).
 
-**3. The Graph + Pool Guardian agent** — *in progress.*
-For the demo, the hook keeps a small set of explicitly `Demo only` per-pool
-aggregates: swap counts and requested exact-input volume split by fee tier and
-input token. That makes headline numbers available through an RPC read while
-the full data path is being built. These are not settled-volume accounting:
-exact-output volume is excluded, and the fields should be removed after the
-demo. A subgraph indexes `SwapPriced` and `DiscountedSwapRecorded` for durable,
-transaction-level analytics, and an agent reasons over that data — flags
-suspicious cadence, summarizes fee flow, answers follow-ups — rather than
-printing raw rows. A plain subgraph would not be worth building on its own.
+**3. The Graph + a packaged analytics skill** — the part that makes the data
+answerable.
 
-Status: the event surface (see
-[DESIGN.md](./DESIGN.md#event-surface-for-indexers)) and the
-[subgraph](#subgraph) are deployed and indexing. The agent and its dashboard are
-not built yet — and they are the part that counts for the prize, since a plain
-subgraph does not qualify on its own.
+A subgraph indexes `SwapPriced`, `SwapExecuted` and the Registry events for
+durable, transaction-level analytics. But a subgraph on its own only returns
+rows, and the rows are full of traps: `amountSpecified` is signed and is the
+*requested* amount, settled amounts are null for anything that bypassed our
+router, the two currencies have different decimals so identical trade sizes look
+varied, and `swapper` is only a wallet under specific conditions. Every one of
+those produces a confident wrong answer.
+
+So the deliverable is [`proofpool-analytics`](./subgraph/skill) — a reusable
+agent skill carrying the endpoint, the schema, those field-level traps, and the
+analytical method for questions like *"does this address look automated?"*.
+**We ship the skill, not a chat UI.** Any agent or workflow can load it and
+answer in plain language; that is the point of packaging it that way, and it is
+why it outlives this demo in a way a bespoke dashboard would not.
+
+The hook also keeps a small set of explicitly `Demo only` per-pool aggregates:
+swap counts and requested exact-input volume split by fee tier and input token,
+readable over plain RPC. They exist so the indexed totals can be checked against
+the contract's own — the subgraph mirrors them field for field on purpose. They
+are not settled-volume accounting: exact-output volume is excluded.
 
 ## Known limitations
 
@@ -167,9 +174,12 @@ Entities worth knowing:
   `ProofPoolHook.demoPoolStats`, so the indexed numbers can be checked against
   the contract's own.
 - **`Swap`** — one per priced swap, with the fee tier applied, direction, and
-  the attestation digest that paid for any discount. `amountIn`/`amountOut` are
-  settled amounts joined from the router, and are null for swaps that bypassed
-  it (`routerExecuted: false`).
+  the digest of any attestation *presented* — which is not the same as one
+  honoured. An expired or exhausted attestation still names itself here next to
+  `verified: false`, so read `verified`, never `digest != 0`. That case is a
+  signal, not noise: it is the only trace of a wallet spending an allowance it
+  no longer had. `amountIn`/`amountOut` are settled amounts joined from the
+  router, and are null for swaps that bypassed it (`routerExecuted: false`).
 - **`Swapper`** — per-wallet totals, the basis for cadence analysis.
 - **`SwapRecord`** / **`DiscountedSwapUse`** — an attestation's allowance
   draining, keyed by EIP-712 digest.
@@ -199,7 +209,9 @@ require.
   attested by an EIP-712 signature.
 - Next.js (verify + swap UI, server-side RP signing and proof verification)
 - The Graph — subgraph deployed to Subgraph Studio ([endpoint](#subgraph))
-- Pool Guardian agent + its dashboard — not built yet
+- [`proofpool-analytics`](./subgraph/skill) — a packaged agent skill over that
+  Subgraph. Portable by design: no runtime of ours, no API key, loads into
+  whatever agent the reader already runs
 
 ## Tools and integrations used
 
@@ -251,17 +263,25 @@ Code created an `.agents/` directory rather than `.claude/`. See
 
 ## Sponsors we're targeting
 
-- **World** — Selfie Check Beta, $1,750 (1st $1,000, 2nd $750). The other
-  $1,750 Selfie Check pot is the Continuity track and is out of reach for the
-  same reason as Uniswap's. Three qualification bullets: meaningful Selfie Check
-  use, a testing report covering **both** developer and user feedback, and a
-  working app or end-to-end prototype.
-- **Uniswap** — Best API Integration ($7,000) is the only reachable prize. We're on Classic track (confirmed, see below), and Continuity requires an actual pre-existing project to extend — we don't have one, so the $3k Stack Contribution prize is off the table regardless of what we build.
-- **The Graph** — Best AI Use Case of The Graph, $3,000. Requires an agent
-  reasoning over live data, not just a subgraph. Best Use of Composable or
-  Standardized Graph Products ($3,000) is a secondary target if we also compose
-  with a Uniswap v4 subgraph for settled amounts. The $4,000 AI Use Case pot is
-  the Continuity track and is out of reach for the same reason as Uniswap's.
+- **World** — Selfie Check Beta, $1,750.
+
+- **The Graph**
+
+  **A Subgraph authored for this project**, deployed to Subgraph Studio,
+  indexing three contracts from block 11349795. It is load-bearing, not
+  decorative: the verified/unverified split, per-wallet cadence, and attestation
+  burn-down exist nowhere else. Verification never touches the chain, so the
+  distinct digests on verified swaps are the only on-chain proxy for a
+  verification funnel that exists at all. Entities and endpoint under
+  [Subgraph](#subgraph).
+
+  **A reusable agent skill on top of it** —
+  [`proofpool-analytics`](./subgraph/skill), open source, with its own
+  [README](./subgraph/skill/README.md) and SKILL.md. Not an app: a portable
+  artifact any agent or workflow loads to query this Subgraph and reason over
+  it. It encodes the field-level traps that otherwise produce confident wrong
+  answers, and the analytical method for the questions people actually ask —
+  *"is this address likely automated?"* — including when to refuse to answer.
 
 ## MVP checklist — 36 hours
 
@@ -282,29 +302,26 @@ done out of sequence:
 - [x] Redeploy (new hook address → new salt → new pool → re-point the web app)
 - [x] Subgraph indexing `SwapPriced`, `SwapExecuted` and the Registry events,
       with per-pool aggregates
-- [ ] Seed traffic: 24 wallets, ~400 swaps, planted behavioural archetypes,
-      spread over time. Run with `maxSwaps` high, then `setMaxSwaps(1)` before
-      the demo — history keeps the variance, the live demo stays legible
-- [ ] Confirm the subgraph indexes the seeded swaps. Empty `pools` with
-      confirmed on-chain traffic means the handler is not matching, and
-      everything downstream is blocked
-- [ ] Pool Guardian agent: answers fee-flow and cadence questions, refuses to
-      overclaim on "how many bots" style questions
-- [ ] Dashboard: agent-written verdict on load, chat for follow-ups
+- [x] Seed traffic: 24 wallets with planted behavioural archetypes, spread over
+      time. 290 swaps landed — 86 verified across 44 distinct attestations,
+      204 unverified
+- [x] Confirm the subgraph indexes the seeded swaps. Verified against the live
+      endpoint: `hasIndexingErrors: false`, all 290 swaps present, every
+      verified swap resolving to its `SwapRecord`, and the indexed per-pool
+      aggregates agreeing with the hook's own
+- [x] `proofpool-analytics` skill: answers fee-flow and cadence questions, and
+      refuses to overclaim on "how many bots" style questions — bot-like *flow*
+      is not a claim about a person. Shipped as a portable skill rather than a
+      chat UI, so it works in whatever agent the reader already uses
+- [x] Tools, SDKs and skills used, and team contacts — see above
+- [ ] `setMaxSwaps(1)` before demoing — the seeded history keeps its variance,
+      and a cap of 1 makes the live walkthrough legible (currently 10)
 - [ ] Demo video. The Graph's tracks state "a 2-4 minute demo video" verbatim;
       World's qualification bullets don't state a length, so cut a single video
       at roughly 3 minutes and it satisfies both
-- [x] Tools, SDKs and skills used, and team contacts — see above
 
 If time left after that:
 - [ ] Scripted sandwich showing the attacker paying the unverified tier on both
       legs, so a marginal sandwich stops clearing. It does not *fail* — nothing
       here detects or blocks it, it just costs 6x more in fees. Demo it that way
       or not at all.
-
-<!-- Not building, don't even discuss during the hackathon:
-- Reputation scoring
-- Off-chain keeper/oracle
-- Substreams
-- Volatility-aware or auction fees
-- Multi-chain -->

@@ -335,8 +335,9 @@ contract ProofPoolHookTest is Test, Deployers {
         _swap(verifiedUser, attestation, signature);
     }
 
-    /// @notice An unverified swap reports a zero digest — there is no attestation to
-    ///         attribute it to, and indexers rely on that to split the two flows.
+    /// @notice A swap that offered no attestation at all reports a zero digest.
+    ///         Note this is the ONLY unverified case that does — see
+    ///         test_swapPricedCarriesDigestWhenAttestationRefused.
     function test_swapPricedCarriesZeroDigestWhenUnverified() public {
         vm.expectEmit(true, true, false, true, address(hook));
         emit SwapPriced(
@@ -344,6 +345,34 @@ contract ProofPoolHookTest is Test, Deployers {
         );
 
         _swapUnverified(unverifiedUser);
+    }
+
+    /// @notice A REFUSED attestation still publishes its digest. LivenessOracle
+    ///         hashes the attestation before it checks expiry or signer, so an
+    ///         attestation that is presented and rejected prices at the
+    ///         unverified tier while still naming itself in the log.
+    ///
+    ///         This is the trap for indexers: `digest != 0` does NOT mean
+    ///         discounted. Consumers must branch on `verified`. The case is
+    ///         worth emitting rather than suppressing — it is the only on-chain
+    ///         trace of a wallet trying to spend an allowance it no longer had.
+    function test_swapPricedCarriesDigestWhenAttestationRefused() public {
+        (LivenessAttestation memory attestation, bytes memory signature) =
+            _attest(verifiedUser, block.timestamp + 1 hours);
+        bytes32 digest = oracle.hashAttestation(attestation);
+
+        // Past validUntil: the oracle now refuses it, but has already hashed it.
+        vm.warp(attestation.validUntil + 1);
+
+        vm.expectEmit(true, true, false, true, address(hook));
+        emit SwapPriced(
+            key.toId(), verifiedUser, false, hook.UNVERIFIED_FEE(), true, -int256(uint256(SWAP_AMOUNT)), digest
+        );
+
+        _swap(verifiedUser, attestation, signature);
+
+        assertTrue(digest != bytes32(0), "a refused attestation must still be identifiable");
+        assertEq(registry.usageCount(digest), 0, "a refused attestation must not consume allowance");
     }
 
     /// @notice Direction has to follow the swap, or an indexer attributes volume to
