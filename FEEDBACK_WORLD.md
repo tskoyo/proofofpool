@@ -143,6 +143,21 @@ The RP must independently compare `response.signal_hash` against
 conclusion we reached ourselves rather than something the integration guide
 warned about.
 
+To be clear about what we are and are not saying: that this check belongs to the
+RP is *correct*. World cannot know which subject our app intends to act on, so
+only we can make that comparison. The gap is signposting, not design.
+
+What makes it easy to miss is that v4 removed the place this used to live.
+There is no server-side verification helper any more — we checked the published
+surface of `@worldcoin/idkit`, `@worldcoin/idkit-core` and
+`@worldcoin/idkit-server` (4.2.1 / 4.2.2 / 1.1.1) and none of them export
+`verifyCloudProof` or any equivalent; `idkit-server` ships signing helpers only
+(`signRequest`, `computeRpSignatureMessage`, `getSessionCommitment`). Verification
+is now a raw POST you assemble yourself, and `signal` appears in the v4 types
+only as a *request-time* input on `CredentialRequest`, never as a verify
+parameter. So the one function signature that used to make the subject binding
+explicit is gone, and nothing in its place mentions the binding.
+
 **Suggested fix:** add this comparison to the integration guide's verification
 step, next to the existing nullifier-storage guidance. It's the same class of
 requirement — something the API cannot enforce for you — and omitting it is a
@@ -216,6 +231,24 @@ Drop-off numbers in the usual sense do not exist here either. Testing was a
 handful of deliberate runs, not traffic.
 
 ---
+
+## What we do with the nullifier
+
+Recorded because World's guidance covers nullifier *storage*, and we went a step
+past it — useful context for how far the existing advice carries.
+
+The nullifier is never persisted and never returned to the client. It is used
+once, server-side, as HMAC input to derive the attestation nonce
+(`HMAC(nullifier, epoch)`), so the value that reaches the chain is not a plain
+function of it. Someone who learns a person's nullifier still cannot compute
+their on-chain digest, and therefore cannot follow their swaps.
+
+It is also never logged beside a wallet address. That one took a deliberate
+removal rather than good intentions: our verify route logged World's full
+response body — which carries the nullifier — in the same request that had
+already logged the subject address. Two innocuous-looking log lines put the pair
+in one stream. Worth flagging as a documentation candidate, because the leak is
+in the *combination*, and neither line looks wrong on its own.
 
 ## Not verified
 
