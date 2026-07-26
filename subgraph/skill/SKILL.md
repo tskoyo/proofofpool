@@ -72,12 +72,24 @@ user for the current endpoint rather than guessing a version number.
 Router events inside a transaction. Queryable, but carries no analytical
 meaning. Ignore it.
 
-**`SwapRecord.swaps` vs `SwapRecord.uses`** — the same events from two sides.
+**`SwapRecord.swaps` vs `SwapRecord.uses`** — two views of one attestation, and
+**they are not the same length.**
 `uses` is the Registry's log, with the running count and timestamps: use it for
 cadence and allowance burn. `swaps` is the Hook's, with amounts, direction and
 pool: use it for value, and it is the only route from an attestation back to a
-wallet. The two should be the same length; a divergence means the index is
-broken, not that something interesting happened.
+wallet.
+
+`swaps` includes every swap that *presented* this attestation; `uses` records
+only the ones that were *honoured*, because the Registry is called only on a
+granted discount. So the invariant is:
+
+```
+count(swaps where verified) == len(uses) == usageCount
+```
+
+and the leftover, `len(swaps) − len(uses)`, is the number of times this
+attestation was presented and refused. That gap is a **signal, not corruption**:
+it is a wallet still reaching for an allowance that had expired or run out.
 
 **IDs do not join across contracts.** `Swap.id` and `DiscountedSwapUse.id` are
 both transaction hash + log index, but different log indices within the same
@@ -484,10 +496,11 @@ check 1 cannot, because check 1 only proves the mapping is self-consistent:
 cast call <hook> "demoPoolStats(bytes32)" <poolId> --rpc-url <sepolia rpc>
 ```
 
-**3. Both sides of an attestation.** `SwapRecord.swaps` (hook side) and
-`SwapRecord.uses` (registry side) are the same events observed from two
-contracts. Their lengths must be equal. Divergence means the index is broken,
-not that something interesting happened.
+**3. Both sides of an attestation.** Per record, assert
+`count(swaps where verified) == len(uses) == usageCount`. Do **not** compare raw
+lengths — `swaps` also carries refused presentations, so `len(swaps) ≥ len(uses)`
+is the normal state and the difference is meaningful rather than corrupt. Only a
+failure of that equality means the index is broken.
 
 Also check `_meta { block { number } hasIndexingErrors }` first, always. A
 surprising answer is more often a subgraph that is behind than a real finding.
