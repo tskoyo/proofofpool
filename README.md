@@ -9,14 +9,19 @@ Uniswap v4 hook that charges unverified addresses more on every swap, and shares
 Running against the [contracts deployed on Sepolia](#deployments--ethereum-sepolia-chain-id-11155111)
 below — same hook, same pool, same Subgraph. Nothing about it is mocked.
 
-**This is a laptop behind a tunnel, up for the judging window only.** The URL
-dies when that process stops, and it will not come back at this address. If it
-does not load, the project is unaffected — everything it talks to is on-chain
+**This is a temporary deployment for easier testing.** The URL may be
+inaccessible or already killed — [get in touch](#team) if you hit a problem. If
+it does not load, the project is unaffected: everything it talks to is on-chain
 and independently reachable, and [SETUP.md](./SETUP.md) brings up your own copy.
 
 To actually swap you need Sepolia ETH for gas. The two demo ERC-20s have a
 public unrestricted `mint`, so fund yourself from any wallet — no faucet needed
 for the tokens, only for gas. Approve `ProofPoolRouter` before the first swap.
+
+Please use it responsibly: **testnet only, so connect a burner wallet and never
+send real funds**. It is a small instance behind a rate limit, so go easy on it.
+And the Selfie Check is a real World credential against production — verify only
+if you are happy to; the swap works fine without it at the unverified tier.
 
 ## Why
 
