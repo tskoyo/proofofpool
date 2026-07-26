@@ -25,7 +25,16 @@ if you are happy to; the swap works fine without it at the unverified tier.
 
 ## Why
 
-Bots and disposable wallets pay the same fee as everyone else on every AMM pool right now. We tax them instead. Doesn't stop bots, doesn't detect sandwich attacks — just makes anonymous flow more expensive and gives that money to LPs. We say this out loud in the pitch, don't oversell it.
+Bots and disposable wallets pay the same fee as everyone else on every AMM pool right now. We tax them instead. Doesn't stop bots, doesn't detect sandwich attacks — just makes anonymous flow more expensive than verified flow and gives that difference to LPs. We say this out loud in the pitch, don't oversell it.
+
+**Why anyone shows up.** Nobody has to be driven off for this to work. An
+unverified wallet pays 0.30% here and 0.30% on a standard pool, so a bot is
+indifferent and that flow has no reason to leave. A verified trader pays 0.05%,
+cheaper than the same pair anywhere else, so retail has a reason to arrive — at
+no cost beyond a selfie. LPs take the lower rate on verified flow in exchange
+for attracting it, and keep the anonymous flow on unchanged terms. The question
+the pool puts to a trader is just: why should you pay the same price as an MEV
+bot?
 
 ## The 3 pieces
 
@@ -340,8 +349,10 @@ done out of sequence:
       is not a claim about a person. Shipped as a portable skill rather than a
       chat UI, so it works in whatever agent the reader already uses
 - [x] Tools, SDKs and skills used, and team contacts — see above
-- [ ] `setMaxSwaps(1)` before demoing — the seeded history keeps its variance,
-      and a cap of 1 makes the live walkthrough legible (currently 10)
+- [x] `setMaxSwaps(2)` before demoing — the seeded history keeps its variance,
+      and a low cap makes the live walkthrough legible. Set at block 11353322;
+      the seeded traffic ran under `10`, so the two are not comparable and
+      [the analytics skill](./subgraph/skill) segments there
 - [ ] Demo video. The Graph's tracks state "a 2-4 minute demo video" verbatim;
       World's qualification bullets don't state a length, so cut a single video
       at roughly 3 minutes and it satisfies both

@@ -1,7 +1,24 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import Link from "next/link";
 import { Button, Card, Icon } from "@/components/ds";
 import type { IconName } from "@/components/ds";
 import { FeeCompareSection } from "@/components/fee-compare-section";
+import { SkillSection } from "@/components/skill-section";
+
+/**
+ * The analytics skill lives beside the subgraph rather than in this app, because it
+ * ships as a standalone artifact anyone can load into their own agent. Read it once
+ * at build time so the page can hand the whole text to the clipboard with no round
+ * trip, and so a missing file degrades to a GitHub link instead of breaking a build.
+ */
+function loadSkill(): string | null {
+    try {
+        return readFileSync(join(process.cwd(), "..", "subgraph", "skill", "SKILL.md"), "utf8");
+    } catch {
+        return null;
+    }
+}
 
 const navLinkStyle = {
     color: "var(--text-secondary)",
@@ -36,6 +53,9 @@ function Nav() {
                 </a>
                 <a href="#fees" style={navLinkStyle}>
                     Fees
+                </a>
+                <a href="#skill" style={navLinkStyle}>
+                    Ask an agent
                 </a>
                 <Link href="/dashboard" style={navLinkStyle}>
                     Live stats
@@ -173,6 +193,7 @@ export default function Home() {
             <Hero />
             <FeeCompareSection />
             <HowItWorks />
+            <SkillSection skillText={loadSkill()} />
             <FooterSection />
         </>
     );

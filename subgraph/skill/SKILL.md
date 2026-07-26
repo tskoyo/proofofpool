@@ -132,14 +132,29 @@ So, whenever the cap matters to an answer:
 3. If the two differ, the cap changed mid-history. Segment your analysis at the
    boundary and say so — do not average across it.
 
-Find the boundary by bisecting on `block: {number: N}` between the two. Anything
+Find a boundary by bisecting on `block: {number: N}` between the two. Anything
 below the subgraph's `startBlock` errors rather than returning empty, which is a
 useful floor: the error message names the earliest available block.
 
-On the demo deployment the boundary is **block 11350309**: null below it, `10` at
-or after. Roughly a third of the indexed history sits below that block, so for a
-substantial slice of these swaps the cap is genuinely unknown — say which swaps
-fall in that slice rather than back-filling them with today's value.
+On the demo deployment the cap has changed **twice**, so the history is in three
+segments:
+
+| Blocks | `maxSwaps` | |
+|---|---|---|
+| below 11350309 | null | not observed — see [When it reads null](#when-it-reads-null) |
+| 11350309 – 11353321 | `10` | almost all the seeded traffic |
+| 11353322 and after | `2` | current; live demo swaps land here |
+
+Two consequences worth stating in any answer that spans them. Roughly a third of
+the indexed history sits below the first boundary, where the cap is genuinely
+unknown — name those swaps rather than back-filling them with today's value. And
+the bulk of the seeded traffic ran under `10` while anything a reader tries
+themselves runs under `2`, so a seeded wallet's verified-swaps-per-attestation is
+**not** comparable to a live one's. Segment at 11353322 before comparing them.
+
+These numbers are a snapshot. Re-derive the boundaries by bisecting if an answer
+turns on them — the owner can change the cap again at any time, and this table
+does not update itself.
 
 Time-travel works on every entity, not just this one.
 
@@ -295,6 +310,7 @@ rescales the whole analysis:
 | `maxSwaps` | What 20 verified swaps means |
 |---|---|
 | 1 | 20 separate live selfies. Very hard to fake. Strong human signal. |
+| 2 (current) | 10 separate live selfies. Still a strong human signal. |
 | 10 | 2 verifications. A human verified twice; a script could have done the rest. |
 | 0 (uncapped) | Expiry alone bounds it. Verification count says little. |
 

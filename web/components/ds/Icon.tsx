@@ -4,11 +4,14 @@ import type { CSSProperties } from "react";
 import {
   ArrowDown,
   ArrowLeft,
+  Check,
   CircleCheckBig,
+  Copy,
   Info,
   ScanFace,
   Settings,
   ShieldCheck,
+  Sparkles,
   TriangleAlert,
   Wallet,
 } from "lucide-react";
@@ -20,11 +23,14 @@ import {
 const registry = {
   "arrow-down": ArrowDown,
   "arrow-left": ArrowLeft,
+  check: Check,
   "check-circle-2": CircleCheckBig,
+  copy: Copy,
   info: Info,
   "scan-face": ScanFace,
   settings: Settings,
   "shield-check": ShieldCheck,
+  sparkles: Sparkles,
   "alert-triangle": TriangleAlert,
   wallet: Wallet,
 } as const;
