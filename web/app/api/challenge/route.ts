@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { challengeForEpoch, currentEpoch } from "@/lib/challenge";
+import { rateLimit } from "@/lib/rate-limit";
 
 /**
  * Hands the client the current challenge to fold into its World ID signal.
@@ -9,7 +10,12 @@ import { challengeForEpoch, currentEpoch } from "@/lib/challenge";
  * Knowing it lets you build a proof for the current window, which is exactly
  * what a legitimate user does.
  */
-export async function GET() {
+export async function GET(req: Request) {
+  // Generous: the widget refetches this every time it opens, and the work is a
+  // single HMAC. This is here to stop hammering, not to ration normal use.
+  const limited = rateLimit(req, "challenge", 60, 60);
+  if (limited) return limited;
+
   try {
     const epoch = currentEpoch();
     return NextResponse.json({ epoch, challenge: challengeForEpoch(epoch) });

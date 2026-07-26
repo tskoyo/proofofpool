@@ -15,6 +15,7 @@ import {
   candidateEpochs,
   challengeForEpoch,
 } from "@/lib/challenge";
+import { rateLimit } from "@/lib/rate-limit";
 
 // Selfie Check has no on-chain verifier (only Orb does, groupId = 1), so the
 // proof is verified here against World's cloud endpoint and the result attested
@@ -63,6 +64,12 @@ function badRequest(error: string, detail?: unknown) {
 }
 
 export async function POST(req: Request) {
+  // Tightest of the three: every call that gets past the local checks costs a
+  // request against World's verify endpoint, so this is quota protection as
+  // much as abuse protection.
+  const limited = rateLimit(req, "verify", 10, 60);
+  if (limited) return limited;
+
   const rpId = process.env.WORLD_RP_ID;
   const expectedAction = process.env.WORLD_ACTION;
   const expectedEnvironment = process.env.WORLD_ENVIRONMENT;
