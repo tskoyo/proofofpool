@@ -61,6 +61,11 @@ The nullifier goes through HMAC so the on-chain digest is not a plain function
 of it; learning someone's nullifier does not let you follow their swaps. It is
 never stored and never logged next to a wallet address.
 
+📄 **[Walkthrough of the whole handshake](./web/public/protocol-flow.html)** — a
+self-contained page with a sequence diagram across all five parties, and what
+specific attack each piece closes. Open it in a browser; it needs no server. It
+is also served at `/protocol-flow.html` when the web app is running.
+
 This is what Selfie Check can actually back — liveness at signing time — and the
 mechanism claims nothing more. See [Known limitations](#known-limitations).
 

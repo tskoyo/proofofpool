@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ProofPool — how the liveness handshake works</title>
+<meta name="description" content="A plain-language walkthrough of ProofPool's liveness handshake: the five parties, both HMACs, and the specific attack each one closes.">
+<style>
+  /* Self-contained on purpose: no webfonts, no scripts, no external requests.
+     Opens correctly from file://, from the repo, or from the running app. */
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+
+  :root {
+    /* Palette inherited from web/styles/tokens/colors.css.
+       Green = verified tier, amber = unverified tier — same semantics as the hook. */
+    --paper:      #faf9f6;
+    --card:       #ffffff;
+    --sunken:     #f3f1eb;
+    --rule:       #e9e6dd;
+    --rule-firm:  #d8d4c8;
+
+    --ink:        #14171a;
+    --ink-2:      #3a3f45;
+    --ink-3:      #6b7280;
+
+    --user:       #3a3f45;
+    --client:     #2f6fed;
+    --server:     #1f9d55;
+    --world:      #c2760a;
+    --chain:      #6d4aad;
+
+    --danger:     #d0342c;
+    --arrow:      #8b8f95;
+
+    --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --measure: 68ch;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #14171a; --card: #1b1f23; --sunken: #212529;
+      --rule: #2c3238; --rule-firm: #3a4149;
+      --ink: #f3f1eb; --ink-2: #c3c7cc; --ink-3: #8d949c;
+      --user: #a7aeb8; --client: #6b9bff; --server: #45c47f;
+      --world: #e0a03f; --chain: #a98ada;
+      --danger: #f0857c; --arrow: #767c84;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #14171a; --card: #1b1f23; --sunken: #212529;
+    --rule: #2c3238; --rule-firm: #3a4149;
+    --ink: #f3f1eb; --ink-2: #c3c7cc; --ink-3: #8d949c;
+    --user: #a7aeb8; --client: #6b9bff; --server: #45c47f;
+    --world: #e0a03f; --chain: #a98ada;
+    --danger: #f0857c; --arrow: #767c84;
+  }
+  :root[data-theme="light"] {
+    --paper: #faf9f6; --card: #ffffff; --sunken: #f3f1eb;
+    --rule: #e9e6dd; --rule-firm: #d8d4c8;
+    --ink: #14171a; --ink-2: #3a3f45; --ink-3: #6b7280;
+    --user: #3a3f45; --client: #2f6fed; --server: #1f9d55;
+    --world: #c2760a; --chain: #6d4aad;
+    --danger: #d0342c; --arrow: #8b8f95;
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 16.5px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: var(--measure);
+    margin: 0 auto;
+    padding: 72px 24px 120px;
+    display: flex;
+    flex-direction: column;
+    gap: 44px;
+  }
+  .wide { max-width: 960px; margin: 0 auto; width: 100%; }
+
+  .eyebrow {
+    font-family: var(--font-mono); font-size: 11.5px; text-transform: uppercase;
+    letter-spacing: 0.13em; color: var(--ink-3); margin: 0 0 10px;
+  }
+
+  h1 { font-size: clamp(30px, 5.5vw, 43px); line-height: 1.1; letter-spacing: -0.022em;
+       font-weight: 680; margin: 0 0 16px; text-wrap: balance; }
+  h2 { font-size: 21px; line-height: 1.25; letter-spacing: -0.012em; font-weight: 660;
+       margin: 0 0 14px; text-wrap: balance; }
+  h3 { font-size: 16.5px; font-weight: 660; margin: 0 0 6px; letter-spacing: -0.006em; }
+
+  p { margin: 0 0 14px; }
+  p:last-child { margin-bottom: 0; }
+  .lede { font-size: 18.5px; line-height: 1.55; color: var(--ink-2); margin: 0; }
+
+  code {
+    font-family: var(--font-mono); font-size: 0.87em;
+    background: var(--sunken); border: 1px solid var(--rule);
+    border-radius: 4px; padding: 1px 5px; word-break: break-word;
+  }
+
+  section { border-top: 1px solid var(--rule); padding-top: 32px; }
+  header { border: 0; padding: 0; }
+
+  .cast { display: flex; flex-direction: column; gap: 1px; background: var(--rule);
+          border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+  .cast-row { display: grid; grid-template-columns: 132px 1fr; gap: 16px;
+              background: var(--card); padding: 13px 16px; align-items: baseline; }
+  @media (max-width: 520px) { .cast-row { grid-template-columns: 1fr; gap: 3px; } }
+  .who { font-family: var(--font-mono); font-size: 12.5px; font-weight: 600;
+         letter-spacing: 0.02em; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .role { color: var(--ink-2); font-size: 14.5px; }
+
+  .u { color: var(--user); }   .u-bg { background: var(--user); }
+  .c { color: var(--client); } .c-bg { background: var(--client); }
+  .s { color: var(--server); } .s-bg { background: var(--server); }
+  .w { color: var(--world); }  .w-bg { background: var(--world); }
+  .b { color: var(--chain); }  .b-bg { background: var(--chain); }
+
+  .plate { background: var(--card); border: 1px solid var(--rule);
+           border-radius: 10px; padding: 8px; overflow-x: auto; }
+  .plate svg { display: block; min-width: 760px; height: auto; }
+  .caption { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3);
+             margin-top: 10px; letter-spacing: 0.02em; }
+
+  /* diagram internals */
+  .lane-label { font-family: var(--font-mono); font-size: 12px; font-weight: 600; letter-spacing: 0.02em; }
+  .lifeline { stroke: var(--rule-firm); stroke-width: 1; stroke-dasharray: 3 4; }
+  .head { fill: var(--card); stroke-width: 1.5; }
+  .msg { stroke: var(--arrow); stroke-width: 1.4; fill: none; }
+  .msg.ret { stroke-dasharray: 5 4; }
+  .mlbl { font-family: var(--font-mono); font-size: 11.5px; fill: var(--ink-2); }
+  .mnum { font-family: var(--font-mono); font-size: 10px; fill: var(--ink-3); }
+  .note { fill: var(--sunken); stroke: var(--rule-firm); stroke-width: 1; }
+  .nlbl { font-family: var(--font-mono); font-size: 10.5px; fill: var(--ink-2); }
+  #ah path { fill: var(--arrow); }
+
+  .steps { display: flex; flex-direction: column; gap: 22px; }
+  .step { display: grid; grid-template-columns: 30px 1fr; gap: 16px; }
+  .num { font-family: var(--font-mono); font-size: 12px; font-weight: 640; color: var(--ink-3);
+         padding-top: 3px; font-variant-numeric: tabular-nums; }
+
+  .probs { display: flex; flex-direction: column; gap: 18px; }
+  .prob { background: var(--card); border: 1px solid var(--rule); border-radius: 9px; padding: 18px 20px; }
+  .prob .tag { font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase;
+               letter-spacing: 0.12em; color: var(--danger); margin: 0 0 7px; }
+  .fix { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--rule-firm); }
+  .fix .tag { color: var(--server); }
+  .like { margin-top: 11px; font-size: 14.5px; color: var(--ink-2);
+          background: var(--sunken); border-radius: 6px; padding: 10px 13px; }
+  .like b { font-weight: 640; color: var(--ink); }
+
+  .tbl-scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 460px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
+       letter-spacing: 0.1em; color: var(--ink-3); font-weight: 600; }
+  td:first-child { font-family: var(--font-mono); font-size: 12.5px; }
+
+  a { color: inherit; text-decoration-color: var(--rule-firm); text-underline-offset: 2px; }
+  a:focus-visible { outline: 2px solid var(--client); outline-offset: 3px; border-radius: 3px; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">ProofPool · protocol walkthrough</p>
+    <h1>How we prove a live human authorised a swap</h1>
+    <p class="lede">Five parties, two HMACs, and one signature that never touches the chain until the
+      user sends it themselves. Here is what each moving part is actually defending against.</p>
+  </header>
+
+  <section>
+    <h2>The job</h2>
+    <p>A swap should cost <strong>0.05%</strong> if a live person authorised it and
+      <strong>0.30%</strong> if nobody did. So we need a token the wallet can carry to the pool that
+      says <em>a human was present</em> — one that can't be copied, can't be reused forever, and
+      doesn't leak who that human is.</p>
+    <p>Everything below exists to close one specific hole in that sentence.</p>
+  </section>
+
+  <section>
+    <h2>Who's involved</h2>
+    <div class="cast">
+      <div class="cast-row"><span class="who u"><span class="dot u-bg"></span>User</span><span class="role">A person with a phone and a wallet. Pays their own gas.</span></div>
+      <div class="cast-row"><span class="who c"><span class="dot c-bg"></span>Client</span><span class="role">The web page in their browser. Assumed hostile — it can send us anything.</span></div>
+      <div class="cast-row"><span class="who s"><span class="dot s-bg"></span>Server</span><span class="role">Our backend. Holds the secret and the signing key. Never sends a transaction.</span></div>
+      <div class="cast-row"><span class="who w"><span class="dot w-bg"></span>World</span><span class="role">World App does the face check; World's API says whether a proof is genuine.</span></div>
+      <div class="cast-row"><span class="who b"><span class="dot b-bg"></span>Blockchain</span><span class="role">Our contracts: the hook that prices the swap, plus the oracle and registry it consults.</span></div>
+    </div>
+  </section>
+
+  <section class="wide">
+    <h2>The flow</h2>
+    <div class="plate">
+      <svg viewBox="0 0 880 700" role="img" aria-labelledby="flow-title flow-desc">
+        <title id="flow-title">ProofPool liveness handshake sequence diagram</title>
+        <desc id="flow-desc">The client fetches a per-epoch challenge, the user takes a Selfie Check
+          in World App, the server checks the address binding before forwarding the proof to World,
+          derives a blinded nonce, and signs an attestation the user carries on-chain.</desc>
+
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z"></path>
+          </marker>
+        </defs>
+
+        <!-- lanes -->
+        <g class="lane-label" text-anchor="middle">
+          <rect class="head" x="18"  y="8" width="100" height="30" rx="6" style="stroke: var(--user)"></rect>
+          <text x="68"  y="28" class="u">User</text>
+          <rect class="head" x="176" y="8" width="100" height="30" rx="6" style="stroke: var(--client)"></rect>
+          <text x="226" y="28" class="c">Client</text>
+          <rect class="head" x="374" y="8" width="100" height="30" rx="6" style="stroke: var(--server)"></rect>
+          <text x="424" y="28" class="s">Server</text>
+          <rect class="head" x="574" y="8" width="100" height="30" rx="6" style="stroke: var(--world)"></rect>
+          <text x="624" y="28" class="w">World</text>
+          <rect class="head" x="756" y="8" width="106" height="30" rx="6" style="stroke: var(--chain)"></rect>
+          <text x="809" y="28" class="b">Blockchain</text>
+        </g>
+
+        <g class="lifeline">
+          <line x1="68"  y1="42" x2="68"  y2="678"></line>
+          <line x1="226" y1="42" x2="226" y2="678"></line>
+          <line x1="424" y1="42" x2="424" y2="678"></line>
+          <line x1="624" y1="42" x2="624" y2="678"></line>
+          <line x1="809" y1="42" x2="809" y2="678"></line>
+        </g>
+
+        <!-- 1: client -> server -->
+        <line class="msg" x1="226" y1="74" x2="424" y2="74" marker-end="url(#ah)"></line>
+        <text class="mnum" x="232" y="60">1</text>
+        <text class="mlbl" x="246" y="69">GET /api/challenge</text>
+
+        <!-- 2: server -> client -->
+        <line class="msg ret" x1="424" y1="104" x2="226" y2="104" marker-end="url(#ah)"></line>
+        <text class="mnum" x="232" y="120">2</text>
+        <text class="mlbl" x="246" y="99">challenge = HMAC(secret, epoch)</text>
+
+        <!-- note: HMAC #1 -->
+        <rect class="note" x="440" y="116" width="230" height="34" rx="5"></rect>
+        <text class="nlbl" x="450" y="132">HMAC #1 — no user data;</text>
+        <text class="nlbl" x="450" y="145">same value for everyone this hour</text>
+
+        <!-- 3: client self -->
+        <path class="msg" d="M 226 172 H 286 V 194 H 232" marker-end="url(#ah)"></path>
+        <text class="mnum" x="232" y="166">3</text>
+        <text class="mlbl" x="296" y="187">signal = address + challenge</text>
+
+        <!-- 4: user -> world -->
+        <line class="msg" x1="68" y1="224" x2="624" y2="224" marker-end="url(#ah)"></line>
+        <text class="mnum" x="74" y="210">4</text>
+        <text class="mlbl" x="88" y="219">Selfie Check in World App</text>
+
+        <!-- 5: world -> client -->
+        <line class="msg ret" x1="624" y1="256" x2="226" y2="256" marker-end="url(#ah)"></line>
+        <text class="mnum" x="232" y="272">5</text>
+        <text class="mlbl" x="246" y="251">proof, carrying signal_hash + nullifier</text>
+
+        <!-- 6: client -> server -->
+        <line class="msg" x1="226" y1="300" x2="424" y2="300" marker-end="url(#ah)"></line>
+        <text class="mnum" x="232" y="286">6</text>
+        <text class="mlbl" x="246" y="295">POST /api/verify (address + proof)</text>
+
+        <!-- 7: server self -->
+        <path class="msg" d="M 424 322 H 484 V 344 H 430" marker-end="url(#ah)"></path>
+        <text class="mnum" x="430" y="316">7</text>
+        <text class="mlbl" x="494" y="337">rebuild challenge, compare signal_hash</text>
+
+        <rect class="note" x="440" y="356" width="256" height="34" rx="5"></rect>
+        <text class="nlbl" x="450" y="372">proves the proof is FOR this address,</text>
+        <text class="nlbl" x="450" y="385">and which epoch it came from</text>
+
+        <!-- 8: server -> world -->
+        <line class="msg" x1="424" y1="412" x2="624" y2="412" marker-end="url(#ah)"></line>
+        <text class="mnum" x="430" y="398">8</text>
+        <text class="mlbl" x="444" y="407">forward the proof, byte for byte</text>
+
+        <!-- 9: world -> server -->
+        <line class="msg ret" x1="624" y1="442" x2="424" y2="442" marker-end="url(#ah)"></line>
+        <text class="mnum" x="430" y="458">9</text>
+        <text class="mlbl" x="470" y="437">genuine</text>
+
+        <!-- 10: server self -->
+        <path class="msg" d="M 424 474 H 484 V 496 H 430" marker-end="url(#ah)"></path>
+        <text class="mnum" x="428" y="468">10</text>
+        <text class="mlbl" x="494" y="489">nonce = HMAC(secret, nullifier + epoch)</text>
+
+        <rect class="note" x="440" y="508" width="180" height="21" rx="5"></rect>
+        <text class="nlbl" x="450" y="522">HMAC #2 — blinds the nullifier</text>
+
+        <!-- 11: server -> client -->
+        <line class="msg ret" x1="424" y1="552" x2="226" y2="552" marker-end="url(#ah)"></line>
+        <text class="mnum" x="228" y="568">11</text>
+        <text class="mlbl" x="246" y="547">attestation + EIP-712 signature</text>
+
+        <!-- 12: user -> chain -->
+        <line class="msg" x1="68" y1="596" x2="809" y2="596" marker-end="url(#ah)"></line>
+        <text class="mnum" x="72" y="582">12</text>
+        <text class="mlbl" x="88" y="591">swap through ProofPoolRouter, carrying the attestation</text>
+
+        <!-- 13: chain self -->
+        <path class="msg" d="M 809 618 H 849 V 640 H 815" marker-end="url(#ah)"></path>
+        <text class="mnum" x="770" y="612">13</text>
+        <text class="mlbl" x="500" y="633" text-anchor="start">Oracle recovers the signer and checks expiry; Registry checks the allowance</text>
+
+        <!-- 14: chain -> user -->
+        <line class="msg ret" x1="809" y1="670" x2="68" y2="670" marker-end="url(#ah)"></line>
+        <text class="mnum" x="72" y="686">14</text>
+        <text class="mlbl" x="88" y="665">0.05% if it all holds, otherwise 0.30%</text>
+      </svg>
+    </div>
+    <p class="caption">Steps 1–3 happen before the camera opens. Steps 12–14 are the only part that costs gas.</p>
+  </section>
+
+  <section>
+    <h2>Step by step</h2>
+    <div class="steps">
+
+      <div class="step"><span class="num">01</span><div>
+        <h3>The client asks for a challenge</h3>
+        <p>The server chops time into fixed windows — <em>epochs</em> — and returns
+          <code>HMAC(secret, epoch)</code>. Note what is <strong>not</strong> in there: nothing about
+          the user. Everyone who asks during the same hour gets the same value. It is unguessable to
+          anyone without the secret, and that is its only job.</p>
+      </div></div>
+
+      <div class="step"><span class="num">02</span><div>
+        <h3>The client binds its own address into the signal</h3>
+        <p>It builds <code>signal = address + ":" + challenge</code>. World ID lets an app attach an
+          arbitrary <em>signal</em> to a proof, and the proof commits to it cryptographically.</p>
+      </div></div>
+
+      <div class="step"><span class="num">03</span><div>
+        <h3>The user takes the Selfie Check</h3>
+        <p>The only step a machine cannot do. World App returns a proof containing a hash of that
+          signal, plus a <em>nullifier</em> — a stable identifier for this person and this action.</p>
+      </div></div>
+
+      <div class="step"><span class="num">04</span><div>
+        <h3>The server checks the binding — before it talks to World</h3>
+        <p>It recomputes <code>hash(address + challenge)</code> for the current and previous epoch and
+          compares against the proof. One comparison, two answers: the proof was issued
+          <strong>for this address</strong>, and it came from <strong>a still-live epoch</strong>. The
+          matching epoch is remembered, and everything downstream derives from <em>that</em> one.</p>
+      </div></div>
+
+      <div class="step"><span class="num">05</span><div>
+        <h3>World confirms the proof is genuine</h3>
+        <p>The result object is forwarded byte for byte. World answers one question only: is this a
+          real proof? It does not know or care which address we are about to act on — that was
+          step 4's job.</p>
+      </div></div>
+
+      <div class="step"><span class="num">06</span><div>
+        <h3>The server derives a nonce and signs</h3>
+        <p><code>nonce = HMAC(secret, nullifier + matchedEpoch)</code>, then an EIP-712 signature over
+          <code>{subject, validUntil, nonce}</code>. The server hands this back and stops. It never
+          submits a transaction and holds no ETH.</p>
+      </div></div>
+
+      <div class="step"><span class="num">07</span><div>
+        <h3>The user swaps, carrying the attestation</h3>
+        <p>The contracts recover the signer, check it hasn't expired, and ask the registry how many
+          discounted swaps this attestation has left. If everything holds: 0.05%. Otherwise the swap
+          still succeeds — it just pays 0.30%.</p>
+      </div></div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>Why each piece exists</h2>
+    <p style="color:var(--ink-2)">Each of these is a hole that a simpler design leaves open.</p>
+
+    <div class="probs">
+
+      <div class="prob">
+        <p class="tag">Problem</p>
+        <h3>A World proof never expires</h3>
+        <p>It's a bearer token. Verify it once and hand out a discount, and the user can save that
+          proof and replay it forever. One selfie buys unlimited discounts, and "a live human
+          authorised this swap" becomes a lie the first time it's reused.</p>
+        <div class="fix">
+          <p class="tag">Solved by HMAC #1 — the challenge</p>
+          <p>Time is cut into epochs, each with its own unguessable challenge folded into the signal.
+            A proof minted in epoch 5 carries epoch 5's challenge. In epoch 7 it no longer matches
+            anything, so it buys nothing.</p>
+          <p class="like"><b>Like:</b> a hostage photo holding today's newspaper. The paper doesn't
+            prove who they are — it proves <em>when</em>.</p>
+        </div>
+      </div>
+
+      <div class="prob">
+        <p class="tag">Problem</p>
+        <h3>World tells you a proof is valid, not who it's valid for</h3>
+        <p>Under the v4 model you forward the proof verbatim; there is nowhere to say "and I'm about
+          to act on address B". So a client can take someone else's perfectly genuine proof, submit it
+          alongside its own address, and a naive backend registers the wrong person.</p>
+        <div class="fix">
+          <p class="tag">Solved by the signal comparison</p>
+          <p>The address is inside the signal, so it's inside the proof's hash. The server recomputes
+            that hash itself and rejects any mismatch. World never has to know about it.</p>
+          <p class="like"><b>Like:</b> a concert ticket with a name printed on it. The door checks the
+            name against your ID — not just that the ticket is real.</p>
+        </div>
+      </div>
+
+      <div class="prob">
+        <p class="tag">Problem</p>
+        <h3>The nullifier is a permanent name tag</h3>
+        <p>It's the same value every time that person verifies. Put it on-chain and you've published a
+          durable identifier — anyone can now watch that human's swaps forever, across every wallet
+          they ever verify.</p>
+        <div class="fix">
+          <p class="tag">Solved by HMAC #2 — the nonce</p>
+          <p>The chain sees <code>HMAC(secret, nullifier + epoch)</code>, never the nullifier. Without
+            the server's secret you cannot go from one to the other, so learning someone's nullifier
+            tells you nothing about their on-chain activity.</p>
+          <p class="like"><b>Like:</b> a coat-check number instead of your name. Perfectly useful to
+            the cloakroom, meaningless to a stranger reading it over your shoulder.</p>
+        </div>
+      </div>
+
+      <div class="prob">
+        <p class="tag">Problem</p>
+        <h3>A random nonce would make the swap cap meaningless</h3>
+        <p>The obvious move is a fresh random nonce per verification. But then replaying the same proof
+          produces a <em>different</em> nonce, a different digest, and therefore a brand-new allowance
+          with zero swaps used. The cap would be decorative.</p>
+        <div class="fix">
+          <p class="tag">Solved by deriving instead of generating</p>
+          <p>The nonce is a pure function of the nullifier and the epoch. Replay the same proof and you
+            rebuild a byte-identical attestation — same digest, same swaps already spent. Re-verifying
+            does not top you up.</p>
+          <p class="like"><b>Like:</b> a punch card. Show it again and it's the same card with the same
+            holes in it, not a fresh one.</p>
+        </div>
+      </div>
+
+      <div class="prob">
+        <p class="tag">Problem</p>
+        <h3>Deriving from "now" would undo all of the above</h3>
+        <p>If step 6 used the <em>current</em> epoch instead of the one the proof came from, then
+          replaying an epoch-5 proof during epoch 6 would derive a different nonce — and hand over a
+          fresh allowance. The exact thing the challenge was built to prevent.</p>
+        <div class="fix">
+          <p class="tag">Solved by carrying matchedEpoch forward</p>
+          <p>Step 4 records which epoch the proof actually matched, and step 6 derives from that. The
+            two HMACs stay locked to the same window. This is a one-word change away from being
+            broken, which is why it's commented so heavily in the code.</p>
+        </div>
+      </div>
+
+      <div class="prob">
+        <p class="tag">Problem</p>
+        <h3>The server holds a signing key</h3>
+        <p>It can mint attestations. If it's compromised, what does the attacker get?</p>
+        <div class="fix">
+          <p class="tag">Bounded by design, not by trust</p>
+          <p>The key only signs a statement; the user submits it and pays their own gas. The server
+            holds no funds and sends no transactions. A stolen key grants unearned <em>discounts</em>
+            on one pool — it cannot move anyone's money — and rotating the trusted signer invalidates
+            every outstanding attestation at once.</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>What an attacker actually gets</h2>
+    <div class="tbl-scroll">
+      <table>
+        <thead>
+          <tr><th>If they steal…</th><th>They can</th><th>They cannot</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>A saved World proof</td><td>Rebuild the same spent attestation</td><td>Get a fresh allowance — that needs a new epoch, so a new selfie</td></tr>
+          <tr><td>Someone's nullifier</td><td>Nothing useful</td><td>Link it to on-chain activity without the server secret</td></tr>
+          <tr><td>An attestation signature</td><td>Nothing — it names its subject</td><td>Use it from a different wallet</td></tr>
+          <tr><td>The signing key</td><td>Mint discounts on one pool</td><td>Move funds, or survive a signer rotation</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>What this does not claim</h2>
+    <p>Verification proves <strong>a live human authorised this swap</strong>. It does not prove the
+      wallet belongs to a unique person — nothing stops one human verifying ten different addresses,
+      and a selfie-level credential could not back that claim anyway. It also doesn't prove a human
+      <em>executed</em> the swap: someone can verify and then let a script spend the allowance, which
+      is exactly what the swap cap is there to bound.</p>
+  </section>
+
+</div>
+</body>
+</html>
